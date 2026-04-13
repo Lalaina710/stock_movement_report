@@ -76,12 +76,8 @@ class StockMovementReportWizard(models.TransientModel):
     # -------------------------------------------------------------------------
 
     def _get_report_data(self):
-        """Build the full report data structure for PDF and Excel."""
+        """Build the full report data structure grouped by warehouse then product."""
         self.ensure_one()
-
-        location_ids = self._get_location_ids()
-        if not location_ids:
-            return self._empty_report()
 
         tz = pytz.timezone(self.env.user.tz or 'UTC')
         date_from_dt = tz.localize(datetime.combine(
@@ -91,7 +87,39 @@ class StockMovementReportWizard(models.TransientModel):
             self.date_to, time.max,
         )).astimezone(pytz.utc).replace(tzinfo=None)
 
-        # Fetch moves in period touching our locations
+        # Determine warehouses to iterate
+        warehouses = self.warehouse_ids or self.env['stock.warehouse'].search([
+            ('company_id', '=', self.env.company.id),
+        ])
+
+        warehouses_data = []
+        grand_total_value = 0.0
+
+        for wh in warehouses:
+            wh_data = self._compute_warehouse_data(wh, date_from_dt, date_to_dt)
+            if wh_data['products']:
+                warehouses_data.append(wh_data)
+                grand_total_value += wh_data['warehouse_total_value']
+
+        return {
+            'company': self.env.company,
+            'date_from': self.date_from.strftime('%d/%m/%Y'),
+            'date_to': self.date_to.strftime('%d/%m/%Y'),
+            'warehouses': warehouses_data,
+            'grand_total_value': grand_total_value,
+            'print_date': fields.Datetime.context_timestamp(
+                self, fields.Datetime.now()
+            ).strftime('%d/%m/%Y à %H:%M:%S'),
+        }
+
+    def _compute_warehouse_data(self, warehouse, date_from_dt, date_to_dt):
+        """Compute report data for a single warehouse."""
+        location_ids = self._get_warehouse_location_ids(warehouse)
+        if not location_ids:
+            return {'warehouse_name': warehouse.name, 'products': [],
+                    'warehouse_total_value': 0.0}
+
+        # Fetch moves in period touching warehouse locations
         domain = [
             ('state', '=', 'done'),
             ('date', '>=', date_from_dt),
@@ -124,7 +152,7 @@ class StockMovementReportWizard(models.TransientModel):
 
         # Group by product
         products_data = []
-        grand_total_value = 0.0
+        warehouse_total_value = 0.0
 
         for _pid, grp in groupby(moves, key=lambda m: m.product_id.id):
             product_moves = self.env['stock.move'].concat(*list(grp))
@@ -176,7 +204,7 @@ class StockMovementReportWizard(models.TransientModel):
                 })
 
             closing_value = running_qty * current_cmup
-            grand_total_value += closing_value
+            warehouse_total_value += closing_value
 
             products_data.append({
                 'product': product,
@@ -194,22 +222,25 @@ class StockMovementReportWizard(models.TransientModel):
             })
 
         return {
-            'company': self.env.company,
-            'warehouse_name': ', '.join(self.warehouse_ids.mapped('name')) if self.warehouse_ids else _('Tous les dépôts'),
-            'date_from': self.date_from.strftime('%d/%m/%Y'),
-            'date_to': self.date_to.strftime('%d/%m/%Y'),
+            'warehouse_name': warehouse.name,
             'products': products_data,
-            'grand_total_value': grand_total_value,
-            'print_date': fields.Datetime.context_timestamp(
-                self, fields.Datetime.now()
-            ).strftime('%d/%m/%Y à %H:%M:%S'),
+            'warehouse_total_value': warehouse_total_value,
         }
 
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
 
+    def _get_warehouse_location_ids(self, warehouse):
+        """Get internal location IDs for a specific warehouse."""
+        locations = self.env['stock.location'].search([
+            ('id', 'child_of', warehouse.lot_stock_id.id),
+            ('usage', '=', 'internal'),
+        ])
+        return locations.ids
+
     def _get_location_ids(self):
+        """Get all internal location IDs based on filter (kept for compat)."""
         if self.warehouse_ids:
             locations = self.env['stock.location'].search([
                 ('id', 'child_of', self.warehouse_ids.mapped('lot_stock_id').ids),
@@ -221,19 +252,6 @@ class StockMovementReportWizard(models.TransientModel):
                 ('company_id', '=', self.env.company.id),
             ])
         return locations.ids
-
-    def _empty_report(self):
-        return {
-            'company': self.env.company,
-            'warehouse_name': ', '.join(self.warehouse_ids.mapped('name')) if self.warehouse_ids else _('Tous les dépôts'),
-            'date_from': self.date_from.strftime('%d/%m/%Y'),
-            'date_to': self.date_to.strftime('%d/%m/%Y'),
-            'products': [],
-            'grand_total_value': 0.0,
-            'print_date': fields.Datetime.context_timestamp(
-                self, fields.Datetime.now()
-            ).strftime('%d/%m/%Y à %H:%M:%S'),
-        }
 
     def _compute_opening_qty(self, product, location_ids, date_from_dt):
         """Qty in the given locations before date_from (SQL for performance)."""
@@ -326,7 +344,6 @@ class StockMovementReportWizard(models.TransientModel):
 
         output = io.BytesIO()
         wb = xlsxwriter.Workbook(output, {'in_memory': True})
-        ws = wb.add_worksheet('Mouvements de stock')
 
         # Formats
         fmt_title = wb.add_format({
@@ -356,109 +373,143 @@ class StockMovementReportWizard(models.TransientModel):
             'bold': True, 'bg_color': '#E2EFDA', 'border': 1,
             'font_size': 10,
         })
-        fmt_grand = wb.add_format({
+        fmt_warehouse = wb.add_format({
+            'bold': True, 'bg_color': '#2F5496', 'font_color': 'white',
+            'border': 1, 'font_size': 12,
+        })
+        fmt_wh_total = wb.add_format({
             'bold': True, 'bg_color': '#4472C4', 'font_color': 'white',
             'border': 1, 'font_size': 11, 'num_format': '#,##0.00',
         })
-        fmt_grand_text = wb.add_format({
+        fmt_wh_total_text = wb.add_format({
             'bold': True, 'bg_color': '#4472C4', 'font_color': 'white',
             'border': 1, 'font_size': 11,
         })
+        fmt_grand = wb.add_format({
+            'bold': True, 'bg_color': '#1F3864', 'font_color': 'white',
+            'border': 2, 'font_size': 12, 'num_format': '#,##0.00',
+        })
+        fmt_grand_text = wb.add_format({
+            'bold': True, 'bg_color': '#1F3864', 'font_color': 'white',
+            'border': 2, 'font_size': 12,
+        })
 
-        # Column widths
-        ws.set_column(0, 0, 12)   # Date
-        ws.set_column(1, 1, 8)    # Type
-        ws.set_column(2, 2, 18)   # N° pièce
-        ws.set_column(3, 3, 35)   # Référence / Tiers
-        ws.set_column(4, 4, 12)   # +/-
-        ws.set_column(5, 5, 12)   # Solde
-        ws.set_column(6, 6, 15)   # P.R. unitaire
-        ws.set_column(7, 7, 18)   # Stock permanent
-
-        # Title
-        ws.merge_range(0, 0, 0, 7, 'Mouvements de stock', fmt_title)
-        ws.write(1, 0, data['company'].name, fmt_text)
-        ws.write(1, 3, data['warehouse_name'], fmt_text)
-        ws.write(1, 6, 'Période du', fmt_text)
-        ws.write(1, 7, '%s au %s' % (data['date_from'], data['date_to']), fmt_text)
-
-        row = 3
         headers = [
             'Date mouv.', 'Type mouv.', 'N° de pièce',
             'Référence / Tiers', '+/-', 'Solde',
             'P.R. unitaire', 'Stock permanent',
         ]
-        for col, h in enumerate(headers):
-            ws.write(row, col, h, fmt_header)
-        row += 1
 
-        for pdata in data['products']:
-            # Product header
-            label = pdata['default_code'] or ''
-            if label:
-                label += '  '
-            label += pdata['name']
-            ws.merge_range(row, 0, row, 3, label, fmt_product)
-            ws.write(row, 4, '', fmt_product)
-            ws.write(row, 5, '', fmt_product)
-            ws.write(row, 6, '', fmt_product)
-            ws.write(row, 7, '', fmt_product)
+        for wh_data in data['warehouses']:
+            ws = wb.add_worksheet(wh_data['warehouse_name'][:31])
+
+            # Column widths
+            ws.set_column(0, 0, 12)
+            ws.set_column(1, 1, 8)
+            ws.set_column(2, 2, 18)
+            ws.set_column(3, 3, 35)
+            ws.set_column(4, 4, 12)
+            ws.set_column(5, 5, 12)
+            ws.set_column(6, 6, 15)
+            ws.set_column(7, 7, 18)
+
+            # Title
+            ws.merge_range(0, 0, 0, 7, 'Mouvements de stock', fmt_title)
+            ws.write(1, 0, data['company'].name, fmt_text)
+            ws.write(1, 3, wh_data['warehouse_name'], fmt_text)
+            ws.write(1, 6, 'Période du', fmt_text)
+            ws.write(1, 7, '%s au %s' % (data['date_from'], data['date_to']), fmt_text)
+
+            row = 3
+            # Column headers
+            for col, h in enumerate(headers):
+                ws.write(row, col, h, fmt_header)
             row += 1
 
-            # Opening balance (Report)
-            ws.write(row, 0, data['date_from'], fmt_text)
-            ws.write(row, 1, 'Report', fmt_text)
-            ws.write(row, 2, '', fmt_text)
-            ws.write(row, 3, 'Stock', fmt_text)
-            ws.write(row, 4, '', fmt_text)
-            ws.write(row, 5, pdata['opening_qty'], fmt_num)
-            ws.write(row, 6, pdata['opening_cmup'], fmt_num)
-            ws.write(row, 7, pdata['opening_value'], fmt_num)
-            row += 1
-
-            # Move lines
-            for line in pdata['lines']:
-                ws.write(row, 0, line['date_fmt'], fmt_text)
-                ws.write(row, 1, line['type'], fmt_text)
-                ws.write(row, 2, line['reference'], fmt_text)
-                ws.write(row, 3, line['partner'], fmt_text)
-                ws.write(row, 4, line['qty'],
-                         fmt_num_neg if line['qty'] < 0 else fmt_num)
-                ws.write(row, 5, line['balance'], fmt_num)
-                ws.write(row, 6, line['unit_cost'], fmt_num)
-                ws.write(row, 7, line['stock_value'], fmt_num)
+            for pdata in wh_data['products']:
+                # Product header
+                label = pdata['default_code'] or ''
+                if label:
+                    label += '  '
+                label += pdata['name']
+                ws.merge_range(row, 0, row, 3, label, fmt_product)
+                ws.write(row, 4, '', fmt_product)
+                ws.write(row, 5, '', fmt_product)
+                ws.write(row, 6, '', fmt_product)
+                ws.write(row, 7, '', fmt_product)
                 row += 1
 
-            # Product subtotal
-            code = pdata['default_code'] or pdata['name']
-            ws.write(row, 0, '', fmt_subtotal_text)
-            ws.write(row, 1, '', fmt_subtotal_text)
+                # Opening balance (Report)
+                ws.write(row, 0, data['date_from'], fmt_text)
+                ws.write(row, 1, 'Report', fmt_text)
+                ws.write(row, 2, '', fmt_text)
+                ws.write(row, 3, 'Stock', fmt_text)
+                ws.write(row, 4, '', fmt_text)
+                ws.write(row, 5, pdata['opening_qty'], fmt_num)
+                ws.write(row, 6, pdata['opening_cmup'], fmt_num)
+                ws.write(row, 7, pdata['opening_value'], fmt_num)
+                row += 1
+
+                # Move lines
+                for line in pdata['lines']:
+                    ws.write(row, 0, line['date_fmt'], fmt_text)
+                    ws.write(row, 1, line['type'], fmt_text)
+                    ws.write(row, 2, line['reference'], fmt_text)
+                    ws.write(row, 3, line['partner'], fmt_text)
+                    ws.write(row, 4, line['qty'],
+                             fmt_num_neg if line['qty'] < 0 else fmt_num)
+                    ws.write(row, 5, line['balance'], fmt_num)
+                    ws.write(row, 6, line['unit_cost'], fmt_num)
+                    ws.write(row, 7, line['stock_value'], fmt_num)
+                    row += 1
+
+                # Product subtotal
+                code = pdata['default_code'] or pdata['name']
+                ws.write(row, 0, '', fmt_subtotal_text)
+                ws.write(row, 1, '', fmt_subtotal_text)
+                ws.merge_range(row, 2, row, 3,
+                               'Total  %s' % code, fmt_subtotal_text)
+                ws.write(row, 4, '', fmt_subtotal_text)
+                ws.write(row, 5, pdata['closing_qty'], fmt_subtotal)
+                ws.write(row, 6, '', fmt_subtotal_text)
+                ws.write(row, 7, pdata['closing_value'], fmt_subtotal)
+                row += 1
+                row += 1  # blank row between products
+
+            # Warehouse total
+            ws.write(row, 0, '', fmt_wh_total_text)
+            ws.write(row, 1, '', fmt_wh_total_text)
             ws.merge_range(row, 2, row, 3,
-                           'Total  %s' % code, fmt_subtotal_text)
-            ws.write(row, 4, '', fmt_subtotal_text)
-            ws.write(row, 5, pdata['closing_qty'], fmt_subtotal)
-            ws.write(row, 6, '', fmt_subtotal_text)
-            ws.write(row, 7, pdata['closing_value'], fmt_subtotal)
+                           'Total  %s' % wh_data['warehouse_name'], fmt_wh_total_text)
+            ws.write(row, 4, '', fmt_wh_total_text)
+            ws.write(row, 5, '', fmt_wh_total_text)
+            ws.write(row, 6, '', fmt_wh_total_text)
+            ws.write(row, 7, wh_data['warehouse_total_value'], fmt_wh_total)
             row += 1
-            row += 1  # blank row between products
 
-        # Grand total
-        ws.write(row, 0, '', fmt_grand_text)
-        ws.write(row, 1, '', fmt_grand_text)
-        ws.merge_range(row, 2, row, 3,
-                       'Total  %s' % data['warehouse_name'], fmt_grand_text)
-        ws.write(row, 4, '', fmt_grand_text)
-        ws.write(row, 5, '', fmt_grand_text)
-        ws.write(row, 6, '', fmt_grand_text)
-        ws.write(row, 7, data['grand_total_value'], fmt_grand)
-        row += 1
+            # A reporter
+            ws.write(row, 0, '', fmt_wh_total_text)
+            ws.write(row, 1, '', fmt_wh_total_text)
+            ws.merge_range(row, 2, row, 5, 'A reporter', fmt_wh_total_text)
+            ws.write(row, 6, '', fmt_wh_total_text)
+            ws.write(row, 7, wh_data['warehouse_total_value'], fmt_wh_total)
 
-        # A reporter
-        ws.write(row, 0, '', fmt_grand_text)
-        ws.write(row, 1, '', fmt_grand_text)
-        ws.merge_range(row, 2, row, 5, 'A reporter', fmt_grand_text)
-        ws.write(row, 6, '', fmt_grand_text)
-        ws.write(row, 7, data['grand_total_value'], fmt_grand)
+        # Summary sheet if multiple warehouses
+        if len(data['warehouses']) > 1:
+            ws_sum = wb.add_worksheet('Récapitulatif')
+            ws_sum.set_column(0, 0, 40)
+            ws_sum.set_column(1, 1, 20)
+            ws_sum.merge_range(0, 0, 0, 1, 'Récapitulatif par dépôt', fmt_title)
+            ws_sum.write(1, 0, '%s au %s' % (data['date_from'], data['date_to']), fmt_text)
+            ws_sum.write(3, 0, 'Dépôt', fmt_header)
+            ws_sum.write(3, 1, 'Valeur stock', fmt_header)
+            row = 4
+            for wh_data in data['warehouses']:
+                ws_sum.write(row, 0, wh_data['warehouse_name'], fmt_text)
+                ws_sum.write(row, 1, wh_data['warehouse_total_value'], fmt_num)
+                row += 1
+            ws_sum.write(row, 0, 'TOTAL GENERAL', fmt_grand_text)
+            ws_sum.write(row, 1, data['grand_total_value'], fmt_grand)
 
         wb.close()
         return output.getvalue()

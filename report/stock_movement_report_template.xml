@@ -32,160 +32,164 @@
         <t t-call="web.html_container">
             <t t-foreach="docs" t-as="wizard">
                 <t t-set="d" t-value="data[wizard.id]"/>
-                <t t-call="web.external_layout">
-                    <div class="page" style="font-size: 11px;">
 
-                        <!-- Report Header -->
-                        <div class="text-center" style="margin-bottom: 5px;">
-                            <h3 style="margin-bottom: 2px;"><strong>Mouvements de stock</strong></h3>
-                        </div>
+                <t t-foreach="d['warehouses']" t-as="wh_data">
+                    <t t-call="web.external_layout">
+                        <div class="page" style="font-size: 11px;">
 
-                        <table class="table-sm" style="width: 100%; margin-bottom: 10px; font-size: 11px;">
-                            <tr>
-                                <td style="width: 40%;"><strong t-out="d['company'].name"/></td>
-                                <td style="width: 30%; text-align: center;">
-                                    <strong t-out="d['warehouse_name']"/>
-                                </td>
-                                <td style="width: 30%; text-align: right;">
-                                    Période du <strong t-out="d['date_from']"/>
-                                    au <strong t-out="d['date_to']"/>
-                                </td>
-                            </tr>
-                        </table>
+                            <!-- Report Header -->
+                            <div class="text-center" style="margin-bottom: 5px;">
+                                <h3 style="margin-bottom: 2px;"><strong>Mouvements de stock</strong></h3>
+                            </div>
 
-                        <!-- Data Table -->
-                        <table class="table table-sm table-bordered"
-                               style="font-size: 10px; width: 100%;">
-                            <thead>
-                                <tr style="background-color: #4472C4; color: white;">
-                                    <th style="width: 9%; text-align: center;">Date<br/>mouv.</th>
-                                    <th style="width: 6%; text-align: center;">Type<br/>mouv.</th>
-                                    <th style="width: 13%; text-align: center;">N° de<br/>pièce</th>
-                                    <th style="width: 27%; text-align: center;">Référence<br/>Tiers</th>
-                                    <th style="width: 9%; text-align: center;">Quantités en stock<br/>+/-</th>
-                                    <th style="width: 9%; text-align: center;">Quantités en stock<br/>Solde</th>
-                                    <th style="width: 12%; text-align: center;">P.R.<br/>unitaire</th>
-                                    <th style="width: 15%; text-align: center;">Stock<br/>permanent</th>
+                            <table class="table-sm" style="width: 100%; margin-bottom: 10px; font-size: 11px;">
+                                <tr>
+                                    <td style="width: 40%;"><strong t-out="d['company'].name"/></td>
+                                    <td style="width: 30%; text-align: center;">
+                                        <strong>Dépôt : <t t-out="wh_data['warehouse_name']"/></strong>
+                                    </td>
+                                    <td style="width: 30%; text-align: right;">
+                                        Période du <strong t-out="d['date_from']"/>
+                                        au <strong t-out="d['date_to']"/>
+                                    </td>
                                 </tr>
-                            </thead>
-                            <tbody>
-                                <t t-foreach="d['products']" t-as="pdata">
-                                    <!-- Product Header -->
-                                    <tr style="background-color: #D9E2F3;">
-                                        <td colspan="8">
-                                            <strong>
-                                                <t t-if="pdata['default_code']">
-                                                    <t t-out="pdata['default_code']"/>
-                                                    <span style="margin-left: 12px;"/>
-                                                </t>
-                                                <t t-out="pdata['name']"/>
-                                            </strong>
-                                        </td>
-                                    </tr>
+                            </table>
 
-                                    <!-- Opening Balance (Report) -->
-                                    <tr>
-                                        <td style="text-align: center;">
-                                            <t t-out="d['date_from']"/>
-                                        </td>
-                                        <td style="text-align: center;">Report</td>
-                                        <td/>
-                                        <td>Stock</td>
-                                        <td/>
-                                        <td style="text-align: right;">
-                                            <t t-out="'%.2f' % pdata['opening_qty']"/>
-                                        </td>
-                                        <td style="text-align: right;">
-                                            <t t-if="pdata['opening_cmup']">
-                                                <t t-out="'{:,.2f}'.format(pdata['opening_cmup']).replace(',', ' ')"/>
-                                            </t>
-                                        </td>
-                                        <td style="text-align: right;">
-                                            <t t-out="'{:,.2f}'.format(pdata['opening_value']).replace(',', ' ')"/>
-                                        </td>
+                            <!-- Data Table -->
+                            <table class="table table-sm table-bordered"
+                                   style="font-size: 10px; width: 100%;">
+                                <thead>
+                                    <tr style="background-color: #4472C4; color: white;">
+                                        <th style="width: 9%; text-align: center;">Date<br/>mouv.</th>
+                                        <th style="width: 6%; text-align: center;">Type<br/>mouv.</th>
+                                        <th style="width: 13%; text-align: center;">N° de<br/>pièce</th>
+                                        <th style="width: 27%; text-align: center;">Référence<br/>Tiers</th>
+                                        <th style="width: 9%; text-align: center;">Quantités en stock<br/>+/-</th>
+                                        <th style="width: 9%; text-align: center;">Quantités en stock<br/>Solde</th>
+                                        <th style="width: 12%; text-align: center;">P.R.<br/>unitaire</th>
+                                        <th style="width: 15%; text-align: center;">Stock<br/>permanent</th>
                                     </tr>
-
-                                    <!-- Move Lines -->
-                                    <t t-foreach="pdata['lines']" t-as="line">
-                                        <tr>
-                                            <td style="text-align: center;">
-                                                <t t-out="line['date_fmt']"/>
-                                            </td>
-                                            <td style="text-align: center;">
-                                                <t t-out="line['type']"/>
-                                            </td>
-                                            <td>
-                                                <t t-out="line['reference']"/>
-                                            </td>
-                                            <td>
-                                                <t t-out="line['partner']"/>
-                                            </td>
-                                            <td t-attf-style="text-align: right;#{' color: red;' if line['qty'] &lt; 0 else ''}">
-                                                <t t-out="'%.2f' % line['qty']"/>
-                                            </td>
-                                            <td style="text-align: right;">
-                                                <t t-out="'%.2f' % line['balance']"/>
-                                            </td>
-                                            <td style="text-align: right;">
-                                                <t t-out="'{:,.2f}'.format(line['unit_cost']).replace(',', ' ')"/>
-                                            </td>
-                                            <td style="text-align: right;">
-                                                <t t-out="'{:,.2f}'.format(line['stock_value']).replace(',', ' ')"/>
+                                </thead>
+                                <tbody>
+                                    <t t-foreach="wh_data['products']" t-as="pdata">
+                                        <!-- Product Header -->
+                                        <tr style="background-color: #D9E2F3;">
+                                            <td colspan="8">
+                                                <strong>
+                                                    <t t-if="pdata['default_code']">
+                                                        <t t-out="pdata['default_code']"/>
+                                                        <span style="margin-left: 12px;"/>
+                                                    </t>
+                                                    <t t-out="pdata['name']"/>
+                                                </strong>
                                             </td>
                                         </tr>
+
+                                        <!-- Opening Balance (Report) -->
+                                        <tr>
+                                            <td style="text-align: center;">
+                                                <t t-out="d['date_from']"/>
+                                            </td>
+                                            <td style="text-align: center;">Report</td>
+                                            <td/>
+                                            <td>Stock</td>
+                                            <td/>
+                                            <td style="text-align: right;">
+                                                <t t-out="'%.2f' % pdata['opening_qty']"/>
+                                            </td>
+                                            <td style="text-align: right;">
+                                                <t t-if="pdata['opening_cmup']">
+                                                    <t t-out="'{:,.2f}'.format(pdata['opening_cmup']).replace(',', ' ')"/>
+                                                </t>
+                                            </td>
+                                            <td style="text-align: right;">
+                                                <t t-out="'{:,.2f}'.format(pdata['opening_value']).replace(',', ' ')"/>
+                                            </td>
+                                        </tr>
+
+                                        <!-- Move Lines -->
+                                        <t t-foreach="pdata['lines']" t-as="line">
+                                            <tr>
+                                                <td style="text-align: center;">
+                                                    <t t-out="line['date_fmt']"/>
+                                                </td>
+                                                <td style="text-align: center;">
+                                                    <t t-out="line['type']"/>
+                                                </td>
+                                                <td>
+                                                    <t t-out="line['reference']"/>
+                                                </td>
+                                                <td>
+                                                    <t t-out="line['partner']"/>
+                                                </td>
+                                                <td t-attf-style="text-align: right;#{' color: red;' if line['qty'] &lt; 0 else ''}">
+                                                    <t t-out="'%.2f' % line['qty']"/>
+                                                </td>
+                                                <td style="text-align: right;">
+                                                    <t t-out="'%.2f' % line['balance']"/>
+                                                </td>
+                                                <td style="text-align: right;">
+                                                    <t t-out="'{:,.2f}'.format(line['unit_cost']).replace(',', ' ')"/>
+                                                </td>
+                                                <td style="text-align: right;">
+                                                    <t t-out="'{:,.2f}'.format(line['stock_value']).replace(',', ' ')"/>
+                                                </td>
+                                            </tr>
+                                        </t>
+
+                                        <!-- Product Subtotal -->
+                                        <tr style="background-color: #E2EFDA; font-weight: bold;">
+                                            <td colspan="4">
+                                                Total <t t-out="pdata['default_code'] or pdata['name']"/>
+                                            </td>
+                                            <td/>
+                                            <td style="text-align: right;">
+                                                <t t-out="'%.2f' % pdata['closing_qty']"/>
+                                            </td>
+                                            <td/>
+                                            <td style="text-align: right;">
+                                                <t t-out="'{:,.2f}'.format(pdata['closing_value']).replace(',', ' ')"/>
+                                            </td>
+                                        </tr>
+
+                                        <!-- Blank separator -->
+                                        <tr><td colspan="8" style="border: none; height: 5px;"/></tr>
                                     </t>
 
-                                    <!-- Product Subtotal -->
-                                    <tr style="background-color: #E2EFDA; font-weight: bold;">
+                                    <!-- Warehouse Total -->
+                                    <tr style="background-color: #4472C4; color: white; font-weight: bold;">
                                         <td colspan="4">
-                                            Total <t t-out="pdata['default_code'] or pdata['name']"/>
+                                            Total <t t-out="wh_data['warehouse_name']"/>
                                         </td>
                                         <td/>
-                                        <td style="text-align: right;">
-                                            <t t-out="'%.2f' % pdata['closing_qty']"/>
-                                        </td>
+                                        <td/>
                                         <td/>
                                         <td style="text-align: right;">
-                                            <t t-out="'{:,.2f}'.format(pdata['closing_value']).replace(',', ' ')"/>
+                                            <t t-out="'{:,.2f}'.format(wh_data['warehouse_total_value']).replace(',', ' ')"/>
                                         </td>
                                     </tr>
 
-                                    <!-- Blank separator -->
-                                    <tr><td colspan="8" style="border: none; height: 5px;"/></tr>
-                                </t>
+                                    <!-- A reporter -->
+                                    <tr style="background-color: #4472C4; color: white; font-weight: bold;">
+                                        <td colspan="6" style="text-align: right;">A reporter</td>
+                                        <td/>
+                                        <td style="text-align: right;">
+                                            <t t-out="'{:,.2f}'.format(wh_data['warehouse_total_value']).replace(',', ' ')"/>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
 
-                                <!-- Grand Total -->
-                                <tr style="background-color: #4472C4; color: white; font-weight: bold;">
-                                    <td colspan="4">
-                                        Total <t t-out="d['warehouse_name']"/>
-                                    </td>
-                                    <td/>
-                                    <td/>
-                                    <td/>
-                                    <td style="text-align: right;">
-                                        <t t-out="'{:,.2f}'.format(d['grand_total_value']).replace(',', ' ')"/>
-                                    </td>
-                                </tr>
+                            <!-- Footer info -->
+                            <div style="font-size: 9px; margin-top: 5px; color: #666;">
+                                Date de tirage :
+                                <t t-out="d.get('print_date', '')"/>
+                            </div>
 
-                                <!-- A reporter -->
-                                <tr style="background-color: #4472C4; color: white; font-weight: bold;">
-                                    <td colspan="6" style="text-align: right;">A reporter</td>
-                                    <td/>
-                                    <td style="text-align: right;">
-                                        <t t-out="'{:,.2f}'.format(d['grand_total_value']).replace(',', ' ')"/>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-
-                        <!-- Footer info -->
-                        <div style="font-size: 9px; margin-top: 5px; color: #666;">
-                            Date de tirage :
-                            <t t-out="d.get('print_date', '')"/>
                         </div>
-
-                    </div>
+                    </t>
                 </t>
+
             </t>
         </t>
     </template>
