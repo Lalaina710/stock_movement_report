@@ -2,6 +2,10 @@ import io
 import base64
 from itertools import groupby
 
+from datetime import datetime, time
+
+import pytz
+
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 
@@ -79,10 +83,13 @@ class StockMovementReportWizard(models.TransientModel):
         if not location_ids:
             return self._empty_report()
 
-        date_from_dt = fields.Datetime.to_datetime(self.date_from)
-        date_to_dt = fields.Datetime.to_datetime(self.date_to).replace(
-            hour=23, minute=59, second=59,
-        )
+        tz = pytz.timezone(self.env.user.tz or 'UTC')
+        date_from_dt = tz.localize(datetime.combine(
+            self.date_from, time.min,
+        )).astimezone(pytz.utc).replace(tzinfo=None)
+        date_to_dt = tz.localize(datetime.combine(
+            self.date_to, time.max,
+        )).astimezone(pytz.utc).replace(tzinfo=None)
 
         # Fetch moves in period touching our locations
         domain = [
@@ -244,10 +251,16 @@ class StockMovementReportWizard(models.TransientModel):
             FROM stock_move sm
             WHERE sm.state = 'done'
               AND sm.product_id = %(pid)s
+              AND sm.company_id = %(company_id)s
               AND sm.date < %(dt)s
               AND (sm.location_id = ANY(%(locs)s)
                    OR sm.location_dest_id = ANY(%(locs)s))
-        """, {'locs': location_ids, 'pid': product.id, 'dt': date_from_dt})
+        """, {
+            'locs': location_ids,
+            'pid': product.id,
+            'company_id': self.env.company.id,
+            'dt': date_from_dt,
+        })
         result = self.env.cr.fetchone()
         return result[0] if result else 0.0
 
@@ -257,10 +270,11 @@ class StockMovementReportWizard(models.TransientModel):
             SELECT COALESCE(SUM(svl.value), 0),
                    COALESCE(SUM(svl.quantity), 0)
             FROM stock_valuation_layer svl
-            JOIN stock_move sm ON sm.id = svl.stock_move_id
+            LEFT JOIN stock_move sm ON sm.id = svl.stock_move_id
             WHERE svl.product_id = %s
-              AND sm.date < %s
-        """, (product.id, date_dt))
+              AND svl.company_id = %s
+              AND COALESCE(sm.date, svl.create_date) < %s
+        """, (product.id, self.env.company.id, date_dt))
         total_value, total_qty = self.env.cr.fetchone()
         if total_qty > 0:
             return total_value / total_qty
