@@ -92,11 +92,15 @@ class StockMovementReportWizard(models.TransientModel):
             ('company_id', '=', self.env.company.id),
         ])
 
+        # Pre-compute CMUP for ALL products at date_from (1 single SQL query)
+        cmup_cache = self._batch_compute_cmup_at_date(date_from_dt)
+
         warehouses_data = []
         grand_total_value = 0.0
 
         for wh in warehouses:
-            wh_data = self._compute_warehouse_data(wh, date_from_dt, date_to_dt)
+            wh_data = self._compute_warehouse_data(
+                wh, date_from_dt, date_to_dt, cmup_cache)
             if wh_data['products']:
                 warehouses_data.append(wh_data)
                 grand_total_value += wh_data['warehouse_total_value']
@@ -112,7 +116,8 @@ class StockMovementReportWizard(models.TransientModel):
             ).strftime('%d/%m/%Y à %H:%M:%S'),
         }
 
-    def _compute_warehouse_data(self, warehouse, date_from_dt, date_to_dt):
+    def _compute_warehouse_data(self, warehouse, date_from_dt, date_to_dt,
+                                cmup_cache):
         """Compute report data for a single warehouse."""
         location_ids = self._get_warehouse_location_ids(warehouse)
         if not location_ids:
@@ -142,6 +147,17 @@ class StockMovementReportWizard(models.TransientModel):
                           and m.location_dest_id.id in location_set)
         )
 
+        if not moves:
+            return {'warehouse_name': warehouse.name, 'products': [],
+                    'warehouse_total_value': 0.0}
+
+        # Collect distinct product IDs from filtered moves
+        product_ids = list(set(moves.mapped('product_id').ids))
+
+        # Batch opening qty: 1 SQL for all products of this warehouse
+        opening_qty_map = self._batch_compute_opening_qty(
+            product_ids, location_ids, date_from_dt)
+
         # Prefetch all valuation layers for these moves in one query
         all_layers = self.env['stock.valuation.layer'].search([
             ('stock_move_id', 'in', moves.ids),
@@ -149,6 +165,10 @@ class StockMovementReportWizard(models.TransientModel):
         layers_by_move = {}
         for layer in all_layers:
             layers_by_move.setdefault(layer.stock_move_id.id, []).append(layer)
+
+        # Prefetch standard_price for fallback
+        products_browse = self.env['product.product'].browse(product_ids)
+        std_price_map = {p.id: p.standard_price for p in products_browse}
 
         # Group by product
         products_data = []
@@ -158,9 +178,10 @@ class StockMovementReportWizard(models.TransientModel):
             product_moves = self.env['stock.move'].concat(*list(grp))
             product = product_moves[0].product_id
 
-            # Opening balance
-            opening_qty = self._compute_opening_qty(product, location_ids, date_from_dt)
-            opening_cmup = self._compute_cmup_at_date(product, date_from_dt)
+            # Opening balance from batch caches
+            opening_qty = opening_qty_map.get(product.id, 0.0)
+            opening_cmup = cmup_cache.get(product.id,
+                                          std_price_map.get(product.id, 0.0))
             opening_value = opening_qty * opening_cmup
 
             lines = []
@@ -239,24 +260,12 @@ class StockMovementReportWizard(models.TransientModel):
         ])
         return locations.ids
 
-    def _get_location_ids(self):
-        """Get all internal location IDs based on filter (kept for compat)."""
-        if self.warehouse_ids:
-            locations = self.env['stock.location'].search([
-                ('id', 'child_of', self.warehouse_ids.mapped('lot_stock_id').ids),
-                ('usage', '=', 'internal'),
-            ])
-        else:
-            locations = self.env['stock.location'].search([
-                ('usage', '=', 'internal'),
-                ('company_id', '=', self.env.company.id),
-            ])
-        return locations.ids
-
-    def _compute_opening_qty(self, product, location_ids, date_from_dt):
-        """Qty in the given locations before date_from (SQL for performance)."""
+    def _batch_compute_opening_qty(self, product_ids, location_ids, date_from_dt):
+        """Batch opening qty for multiple products in 1 SQL query."""
+        if not product_ids:
+            return {}
         self.env.cr.execute("""
-            SELECT
+            SELECT sm.product_id,
                 COALESCE(SUM(CASE
                     WHEN sm.location_dest_id = ANY(%(locs)s)
                      AND sm.location_id != ALL(%(locs)s)
@@ -268,35 +277,37 @@ class StockMovementReportWizard(models.TransientModel):
                     THEN sm.quantity ELSE 0 END), 0)
             FROM stock_move sm
             WHERE sm.state = 'done'
-              AND sm.product_id = %(pid)s
+              AND sm.product_id = ANY(%(pids)s)
               AND sm.company_id = %(company_id)s
               AND sm.date < %(dt)s
               AND (sm.location_id = ANY(%(locs)s)
                    OR sm.location_dest_id = ANY(%(locs)s))
+            GROUP BY sm.product_id
         """, {
             'locs': location_ids,
-            'pid': product.id,
+            'pids': product_ids,
             'company_id': self.env.company.id,
             'dt': date_from_dt,
         })
-        result = self.env.cr.fetchone()
-        return result[0] if result else 0.0
+        return dict(self.env.cr.fetchall())
 
-    def _compute_cmup_at_date(self, product, date_dt):
-        """Compute AVCO unit cost at a given date from valuation layers."""
+    def _batch_compute_cmup_at_date(self, date_dt):
+        """Batch CMUP for ALL products in 1 SQL query. Returns {product_id: cmup}."""
         self.env.cr.execute("""
-            SELECT COALESCE(SUM(svl.value), 0),
-                   COALESCE(SUM(svl.quantity), 0)
+            SELECT svl.product_id,
+                   SUM(svl.value),
+                   SUM(svl.quantity)
             FROM stock_valuation_layer svl
             LEFT JOIN stock_move sm ON sm.id = svl.stock_move_id
-            WHERE svl.product_id = %s
-              AND svl.company_id = %s
+            WHERE svl.company_id = %s
               AND COALESCE(sm.date, svl.create_date) < %s
-        """, (product.id, self.env.company.id, date_dt))
-        total_value, total_qty = self.env.cr.fetchone()
-        if total_qty > 0:
-            return total_value / total_qty
-        return product.standard_price
+            GROUP BY svl.product_id
+            HAVING SUM(svl.quantity) > 0
+        """, (self.env.company.id, date_dt))
+        result = {}
+        for product_id, total_value, total_qty in self.env.cr.fetchall():
+            result[product_id] = total_value / total_qty
+        return result
 
     def _compute_move_qty(self, move, location_set):
         """Signed qty change for our locations. Positive = entry, negative = exit."""
@@ -316,13 +327,10 @@ class StockMovementReportWizard(models.TransientModel):
 
     def _classify_move(self, move, location_set):
         """Classify a stock move into Sage-style type codes."""
-        # Inventory adjustment
         if move.is_inventory:
             return 'INV'
-        # Manufacturing (mrp may not be installed)
         if hasattr(move, 'production_id') and (move.production_id or move.raw_material_production_id):
             return 'FAB'
-        # Picking-based
         if move.picking_id and move.picking_id.picking_type_id:
             code = move.picking_id.picking_type_id.code
             origin = (move.picking_id.origin or '').lower()
@@ -373,10 +381,6 @@ class StockMovementReportWizard(models.TransientModel):
             'bold': True, 'bg_color': '#E2EFDA', 'border': 1,
             'font_size': 10,
         })
-        fmt_warehouse = wb.add_format({
-            'bold': True, 'bg_color': '#2F5496', 'font_color': 'white',
-            'border': 1, 'font_size': 12,
-        })
         fmt_wh_total = wb.add_format({
             'bold': True, 'bg_color': '#4472C4', 'font_color': 'white',
             'border': 1, 'font_size': 11, 'num_format': '#,##0.00',
@@ -421,7 +425,6 @@ class StockMovementReportWizard(models.TransientModel):
             ws.write(1, 7, '%s au %s' % (data['date_from'], data['date_to']), fmt_text)
 
             row = 3
-            # Column headers
             for col, h in enumerate(headers):
                 ws.write(row, col, h, fmt_header)
             row += 1
@@ -439,7 +442,7 @@ class StockMovementReportWizard(models.TransientModel):
                 ws.write(row, 7, '', fmt_product)
                 row += 1
 
-                # Opening balance (Report)
+                # Opening balance
                 ws.write(row, 0, data['date_from'], fmt_text)
                 ws.write(row, 1, 'Report', fmt_text)
                 ws.write(row, 2, '', fmt_text)
@@ -474,7 +477,7 @@ class StockMovementReportWizard(models.TransientModel):
                 ws.write(row, 6, '', fmt_subtotal_text)
                 ws.write(row, 7, pdata['closing_value'], fmt_subtotal)
                 row += 1
-                row += 1  # blank row between products
+                row += 1  # blank row
 
             # Warehouse total
             ws.write(row, 0, '', fmt_wh_total_text)
