@@ -369,6 +369,17 @@ class StockMovementReportWizard(models.TransientModel):
             'border': 1, 'font_size': 10, 'num_format': '#,##0.00',
             'font_color': 'red',
         })
+        fmt_qty = wb.add_format({
+            'border': 1, 'font_size': 10, 'num_format': '#,##0.000',
+        })
+        fmt_qty_neg = wb.add_format({
+            'border': 1, 'font_size': 10, 'num_format': '#,##0.000',
+            'font_color': 'red',
+        })
+        fmt_subtotal_qty = wb.add_format({
+            'bold': True, 'bg_color': '#E2EFDA', 'border': 1,
+            'font_size': 10, 'num_format': '#,##0.000',
+        })
         fmt_product = wb.add_format({
             'bold': True, 'bg_color': '#D9E2F3', 'border': 1,
             'font_size': 11,
@@ -448,7 +459,7 @@ class StockMovementReportWizard(models.TransientModel):
                 ws.write(row, 2, '', fmt_text)
                 ws.write(row, 3, 'Stock', fmt_text)
                 ws.write(row, 4, '', fmt_text)
-                ws.write(row, 5, pdata['opening_qty'], fmt_num)
+                ws.write(row, 5, pdata['opening_qty'], fmt_qty)
                 ws.write(row, 6, pdata['opening_cmup'], fmt_num)
                 ws.write(row, 7, pdata['opening_value'], fmt_num)
                 row += 1
@@ -460,8 +471,8 @@ class StockMovementReportWizard(models.TransientModel):
                     ws.write(row, 2, line['reference'], fmt_text)
                     ws.write(row, 3, line['partner'], fmt_text)
                     ws.write(row, 4, line['qty'],
-                             fmt_num_neg if line['qty'] < 0 else fmt_num)
-                    ws.write(row, 5, line['balance'], fmt_num)
+                             fmt_qty_neg if line['qty'] < 0 else fmt_qty)
+                    ws.write(row, 5, line['balance'], fmt_qty)
                     ws.write(row, 6, line['unit_cost'], fmt_num)
                     ws.write(row, 7, line['stock_value'], fmt_num)
                     row += 1
@@ -473,7 +484,7 @@ class StockMovementReportWizard(models.TransientModel):
                 ws.merge_range(row, 2, row, 3,
                                'Total  %s' % code, fmt_subtotal_text)
                 ws.write(row, 4, '', fmt_subtotal_text)
-                ws.write(row, 5, pdata['closing_qty'], fmt_subtotal)
+                ws.write(row, 5, pdata['closing_qty'], fmt_subtotal_qty)
                 ws.write(row, 6, '', fmt_subtotal_text)
                 ws.write(row, 7, pdata['closing_value'], fmt_subtotal)
                 row += 1

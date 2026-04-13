@@ -95,7 +95,7 @@
                                             <td>Stock</td>
                                             <td/>
                                             <td style="text-align: right;">
-                                                <t t-out="'%.2f' % pdata['opening_qty']"/>
+                                                <t t-out="'%.3f' % pdata['opening_qty']"/>
                                             </td>
                                             <td style="text-align: right;">
                                                 <t t-if="pdata['opening_cmup']">
@@ -123,10 +123,10 @@
                                                     <t t-out="line['partner']"/>
                                                 </td>
                                                 <td t-attf-style="text-align: right;#{' color: red;' if line['qty'] &lt; 0 else ''}">
-                                                    <t t-out="'%.2f' % line['qty']"/>
+                                                    <t t-out="'%.3f' % line['qty']"/>
                                                 </td>
                                                 <td style="text-align: right;">
-                                                    <t t-out="'%.2f' % line['balance']"/>
+                                                    <t t-out="'%.3f' % line['balance']"/>
                                                 </td>
                                                 <td style="text-align: right;">
                                                     <t t-out="'{:,.2f}'.format(line['unit_cost']).replace(',', ' ')"/>
@@ -144,7 +144,7 @@
                                             </td>
                                             <td/>
                                             <td style="text-align: right;">
-                                                <t t-out="'%.2f' % pdata['closing_qty']"/>
+                                                <t t-out="'%.3f' % pdata['closing_qty']"/>
                                             </td>
                                             <td/>
                                             <td style="text-align: right;">
