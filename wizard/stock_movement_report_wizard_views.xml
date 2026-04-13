@@ -13,7 +13,7 @@
                         <field name="date_to"/>
                     </group>
                     <group string="Filtres">
-                        <field name="warehouse_id"/>
+                        <field name="warehouse_ids" widget="many2many_tags"/>
                         <field name="product_ids" widget="many2many_tags"/>
                         <field name="lot_id"/>
                     </group>

@@ -27,8 +27,8 @@ class StockMovementReportWizard(models.TransientModel):
         domain=[('is_storable', '=', True)],
         help='Laisser vide pour tous les produits stockables',
     )
-    warehouse_id = fields.Many2one(
-        'stock.warehouse', string='Dépôt',
+    warehouse_ids = fields.Many2many(
+        'stock.warehouse', string='Dépôt(s)',
         help='Laisser vide pour tous les dépôts',
     )
     lot_id = fields.Many2one(
@@ -195,7 +195,7 @@ class StockMovementReportWizard(models.TransientModel):
 
         return {
             'company': self.env.company,
-            'warehouse_name': self.warehouse_id.name if self.warehouse_id else _('Tous les dépôts'),
+            'warehouse_name': ', '.join(self.warehouse_ids.mapped('name')) if self.warehouse_ids else _('Tous les dépôts'),
             'date_from': self.date_from.strftime('%d/%m/%Y'),
             'date_to': self.date_to.strftime('%d/%m/%Y'),
             'products': products_data,
@@ -210,9 +210,9 @@ class StockMovementReportWizard(models.TransientModel):
     # -------------------------------------------------------------------------
 
     def _get_location_ids(self):
-        if self.warehouse_id:
+        if self.warehouse_ids:
             locations = self.env['stock.location'].search([
-                ('id', 'child_of', self.warehouse_id.lot_stock_id.id),
+                ('id', 'child_of', self.warehouse_ids.mapped('lot_stock_id').ids),
                 ('usage', '=', 'internal'),
             ])
         else:
@@ -225,7 +225,7 @@ class StockMovementReportWizard(models.TransientModel):
     def _empty_report(self):
         return {
             'company': self.env.company,
-            'warehouse_name': self.warehouse_id.name if self.warehouse_id else _('Tous les dépôts'),
+            'warehouse_name': ', '.join(self.warehouse_ids.mapped('name')) if self.warehouse_ids else _('Tous les dépôts'),
             'date_from': self.date_from.strftime('%d/%m/%Y'),
             'date_to': self.date_to.strftime('%d/%m/%Y'),
             'products': [],
