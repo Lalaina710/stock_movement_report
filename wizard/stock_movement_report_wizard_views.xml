@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+
+    <!-- Wizard Form View -->
+    <record id="view_stock_movement_report_wizard_form" model="ir.ui.view">
+        <field name="name">stock.movement.report.wizard.form</field>
+        <field name="model">stock.movement.report.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Mouvements de stock">
+                <group>
+                    <group string="Période">
+                        <field name="date_from"/>
+                        <field name="date_to"/>
+                    </group>
+                    <group string="Filtres">
+                        <field name="warehouse_id"/>
+                        <field name="product_ids" widget="many2many_tags"/>
+                        <field name="lot_id"/>
+                    </group>
+                </group>
+                <footer>
+                    <button name="action_print_pdf" string="Imprimer PDF"
+                            type="object" class="btn-primary"
+                            icon="fa-file-pdf-o"/>
+                    <button name="action_export_excel" string="Exporter Excel"
+                            type="object" class="btn-secondary"
+                            icon="fa-file-excel-o"/>
+                    <button string="Annuler" class="btn-secondary"
+                            special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- Wizard Action -->
+    <record id="action_stock_movement_report_wizard" model="ir.actions.act_window">
+        <field name="name">Mouvements de stock</field>
+        <field name="res_model">stock.movement.report.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <!-- Menu under Inventory > Reporting -->
+    <menuitem id="menu_stock_movement_report"
+              name="Mouvements de stock (Sage)"
+              parent="stock.menu_warehouse_report"
+              action="action_stock_movement_report_wizard"
+              sequence="99"/>
+
+</odoo>
