@@ -34,6 +34,11 @@ class StockMovementReportWizard(models.TransientModel):
     lot_id = fields.Many2one(
         'stock.lot', string='Lot/N° de série',
     )
+    group_by_warehouse = fields.Boolean(
+        string='Par dépôt',
+        default=True,
+        help='Coché = regrouper par dépôt. Décoché = tous dépôts combinés.',
+    )
     # Excel download
     report_file = fields.Binary('Fichier', readonly=True)
     report_filename = fields.Char('Nom du fichier', readonly=True)
@@ -98,12 +103,25 @@ class StockMovementReportWizard(models.TransientModel):
         warehouses_data = []
         grand_total_value = 0.0
 
-        for wh in warehouses:
-            wh_data = self._compute_warehouse_data(
-                wh, date_from_dt, date_to_dt, cmup_cache)
-            if wh_data['products']:
-                warehouses_data.append(wh_data)
-                grand_total_value += wh_data['warehouse_total_value']
+        if self.group_by_warehouse:
+            # Mode "Par dépôt" : un bloc par dépôt
+            for wh in warehouses:
+                wh_data = self._compute_warehouse_data(
+                    wh, date_from_dt, date_to_dt, cmup_cache)
+                if wh_data['products']:
+                    warehouses_data.append(wh_data)
+                    grand_total_value += wh_data['warehouse_total_value']
+        else:
+            # Mode "Tous dépôts" : un seul bloc combiné
+            all_location_ids = []
+            for wh in warehouses:
+                all_location_ids.extend(self._get_warehouse_location_ids(wh))
+            if all_location_ids:
+                wh_data = self._compute_all_warehouses_data(
+                    all_location_ids, date_from_dt, date_to_dt, cmup_cache)
+                if wh_data['products']:
+                    warehouses_data.append(wh_data)
+                    grand_total_value += wh_data['warehouse_total_value']
 
         return {
             'company': self.env.company,
@@ -244,6 +262,134 @@ class StockMovementReportWizard(models.TransientModel):
 
         return {
             'warehouse_name': warehouse.name,
+            'products': products_data,
+            'warehouse_total_value': warehouse_total_value,
+        }
+
+    def _compute_all_warehouses_data(self, location_ids, date_from_dt, date_to_dt,
+                                      cmup_cache):
+        """Compute report data for ALL warehouses combined (no grouping by depot)."""
+        if not location_ids:
+            return {'warehouse_name': 'Tous dépôts', 'products': [],
+                    'warehouse_total_value': 0.0}
+
+        # Fetch moves in period touching any warehouse location
+        domain = [
+            ('state', '=', 'done'),
+            ('date', '>=', date_from_dt),
+            ('date', '<=', date_to_dt),
+            '|',
+            ('location_id', 'in', location_ids),
+            ('location_dest_id', 'in', location_ids),
+        ]
+        if self.product_ids:
+            domain.append(('product_id', 'in', self.product_ids.ids))
+        if self.lot_id:
+            domain.append(('lot_ids', 'in', [self.lot_id.id]))
+
+        moves = self.env['stock.move'].search(domain, order='product_id, date, id')
+
+        # Filter out moves internal to the same set of locations (net zero)
+        location_set = set(location_ids)
+        moves = moves.filtered(
+            lambda m: not (m.location_id.id in location_set
+                          and m.location_dest_id.id in location_set)
+        )
+
+        if not moves:
+            return {'warehouse_name': 'Tous dépôts', 'products': [],
+                    'warehouse_total_value': 0.0}
+
+        # Collect distinct product IDs from filtered moves
+        product_ids = list(set(moves.mapped('product_id').ids))
+
+        # Batch opening qty: 1 SQL for all products across all locations
+        opening_qty_map = self._batch_compute_opening_qty(
+            product_ids, location_ids, date_from_dt)
+
+        # Prefetch all valuation layers for these moves in one query
+        all_layers = self.env['stock.valuation.layer'].search([
+            ('stock_move_id', 'in', moves.ids),
+        ])
+        layers_by_move = {}
+        for layer in all_layers:
+            layers_by_move.setdefault(layer.stock_move_id.id, []).append(layer)
+
+        # Prefetch standard_price for fallback
+        products_browse = self.env['product.product'].browse(product_ids)
+        std_price_map = {p.id: p.standard_price for p in products_browse}
+
+        # Group by product
+        products_data = []
+        warehouse_total_value = 0.0
+
+        for _pid, grp in groupby(moves, key=lambda m: m.product_id.id):
+            product_moves = self.env['stock.move'].concat(*list(grp))
+            product = product_moves[0].product_id
+
+            opening_qty = opening_qty_map.get(product.id, 0.0)
+            opening_cmup = cmup_cache.get(product.id,
+                                          std_price_map.get(product.id, 0.0))
+            opening_value = opening_qty * opening_cmup
+
+            lines = []
+            running_qty = opening_qty
+            running_value = opening_value
+            current_cmup = opening_cmup
+
+            for move in product_moves:
+                qty = self._compute_move_qty(move, location_set)
+                move_type = self._classify_move(move, location_set)
+
+                move_layers = layers_by_move.get(move.id, [])
+                if move_layers:
+                    layer_value = sum(l.value for l in move_layers)
+                    layer_qty = sum(l.quantity for l in move_layers)
+                    move_unit_cost = abs(layer_value / layer_qty) if layer_qty else current_cmup
+                else:
+                    move_unit_cost = current_cmup
+
+                if qty > 0 and (running_qty + qty) > 0:
+                    current_cmup = (
+                        (running_qty * current_cmup + qty * move_unit_cost)
+                        / (running_qty + qty)
+                    )
+
+                running_qty += qty
+                running_value = running_qty * current_cmup
+
+                lines.append({
+                    'date': fields.Date.to_string(move.date),
+                    'date_fmt': move.date.strftime('%d/%m/%Y'),
+                    'type': move_type,
+                    'reference': move.picking_id.name or move.reference or move.name or '',
+                    'partner': move.picking_id.partner_id.name or '',
+                    'qty': qty,
+                    'balance': running_qty,
+                    'unit_cost': current_cmup,
+                    'stock_value': running_value,
+                })
+
+            closing_value = running_qty * current_cmup
+            warehouse_total_value += closing_value
+
+            products_data.append({
+                'product': product,
+                'default_code': product.default_code or '',
+                'name': product.name,
+                'opening_qty': opening_qty,
+                'opening_value': opening_value,
+                'opening_cmup': opening_cmup,
+                'lines': lines,
+                'closing_qty': running_qty,
+                'closing_value': closing_value,
+                'closing_cmup': current_cmup,
+                'total_in': sum(l['qty'] for l in lines if l['qty'] > 0),
+                'total_out': sum(l['qty'] for l in lines if l['qty'] < 0),
+            })
+
+        return {
+            'warehouse_name': 'Tous dépôts',
             'products': products_data,
             'warehouse_total_value': warehouse_total_value,
         }
