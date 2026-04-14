@@ -1,12 +1,12 @@
 # Stock Movement Report — Format Sage 100
 
-**Odoo 18 | v18.0.1.1.0 | LGPL-3**
+**Odoo 18 | v18.0.1.2.0 | LGPL-3**
 
 Rapport de mouvements de stock valorisés reproduisant fidèlement le format Sage 100, avec calcul du CMUP (Coût Moyen Unitaire Pondéré).
 
 ## Fonctionnalités
 
-- **Wizard de filtres** : Période (obligatoire), Produit(s), Dépôt, Lot/N° de série
+- **Wizard de filtres** : Période (obligatoire), Produit(s), Dépôt, Lot/N° de série, Par dépôt (toggle)
 - **PDF QWeb** : Mise en page paysage A4 identique au rapport Sage
   - En-tête : Société, Dépôt, Période
   - Report d'ouverture (stock initial)
@@ -57,6 +57,9 @@ Rapport de mouvements de stock valorisés reproduisant fidèlement le format Sag
 - `stock.move.line` (pour le filtrage par lot)
 
 ## Changelog
+
+### v18.0.1.2.0
+- **feat:** Toggle "Par dépôt" dans le wizard — activé = rapport groupé par dépôt (défaut), désactivé = tous dépôts combinés en un seul bloc
 
 ### v18.0.1.1.0
 - **fix:** CMUP d'ouverture inclut désormais les layers de revalorisation (LEFT JOIN au lieu de INNER JOIN)
