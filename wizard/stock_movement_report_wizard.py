@@ -39,6 +39,11 @@ class StockMovementReportWizard(models.TransientModel):
         default=True,
         help='Coché = regrouper par dépôt. Décoché = tous dépôts combinés.',
     )
+    stock_brut = fields.Boolean(
+        string='Stock Brut',
+        default=False,
+        help='Coché = export Excel à plat (une ligne par mouvement, sans report/solde/sous-totaux). Format fusion Sage : Date, Type, N° Pièce, Code, Article, Famille, Tiers, Dépôt, Quantité, CMUP, Montant.',
+    )
     # Excel download
     report_file = fields.Binary('Fichier', readonly=True)
     report_filename = fields.Char('Nom du fichier', readonly=True)
@@ -50,6 +55,10 @@ class StockMovementReportWizard(models.TransientModel):
     def action_print_pdf(self):
         self.ensure_one()
         self._validate()
+        if self.stock_brut:
+            raise UserError(_(
+                "Le mode 'Stock Brut' est uniquement disponible en export Excel."
+            ))
         return self.env.ref(
             'stock_movement_report.action_report_stock_movement'
         ).report_action(self)
@@ -57,10 +66,17 @@ class StockMovementReportWizard(models.TransientModel):
     def action_export_excel(self):
         self.ensure_one()
         self._validate()
-        data = self._get_report_data()
-        content = self._generate_xlsx(data)
+        if self.stock_brut:
+            rows = self._get_brut_data()
+            content = self._generate_xlsx_brut(rows)
+            prefix = 'stock_brut'
+        else:
+            data = self._get_report_data()
+            content = self._generate_xlsx(data)
+            prefix = 'mouvements_stock'
         self.report_file = base64.b64encode(content)
-        self.report_filename = 'mouvements_stock_%s_%s.xlsx' % (
+        self.report_filename = '%s_%s_%s.xlsx' % (
+            prefix,
             self.date_from.strftime('%Y%m%d'),
             self.date_to.strftime('%Y%m%d'),
         )
@@ -670,6 +686,215 @@ class StockMovementReportWizard(models.TransientModel):
                 row += 1
             ws_sum.write(row, 0, 'TOTAL GENERAL', fmt_grand_text)
             ws_sum.write(row, 1, data['grand_total_value'], fmt_grand)
+
+        wb.close()
+        return output.getvalue()
+
+    # -------------------------------------------------------------------------
+    # Stock Brut : export plat (une ligne par mouvement)
+    # -------------------------------------------------------------------------
+
+    def _get_brut_data(self):
+        """Build a flat list of moves, one row per move, across all warehouses."""
+        self.ensure_one()
+
+        tz = pytz.timezone(self.env.user.tz or 'UTC')
+        date_from_dt = tz.localize(datetime.combine(
+            self.date_from, time.min,
+        )).astimezone(pytz.utc).replace(tzinfo=None)
+        date_to_dt = tz.localize(datetime.combine(
+            self.date_to, time.max,
+        )).astimezone(pytz.utc).replace(tzinfo=None)
+
+        warehouses = self.warehouse_ids or self.env['stock.warehouse'].search([
+            ('company_id', '=', self.env.company.id),
+        ])
+
+        # Map location_id -> warehouse for labeling
+        wh_by_location = {}
+        all_location_ids = []
+        for wh in warehouses:
+            loc_ids = self._get_warehouse_location_ids(wh)
+            all_location_ids.extend(loc_ids)
+            for lid in loc_ids:
+                wh_by_location[lid] = wh
+        location_set = set(all_location_ids)
+
+        if not location_set:
+            return []
+
+        domain = [
+            ('state', '=', 'done'),
+            ('date', '>=', date_from_dt),
+            ('date', '<=', date_to_dt),
+            '|',
+            ('location_id', 'in', list(location_set)),
+            ('location_dest_id', 'in', list(location_set)),
+        ]
+        if self.product_ids:
+            domain.append(('product_id', 'in', self.product_ids.ids))
+        if self.lot_id:
+            domain.append(('lot_ids', 'in', [self.lot_id.id]))
+
+        moves = self.env['stock.move'].search(domain, order='date, id')
+
+        # Filter out moves internal to the same set of locations (net zero)
+        moves = moves.filtered(
+            lambda m: not (m.location_id.id in location_set
+                          and m.location_dest_id.id in location_set)
+        )
+        if not moves:
+            return []
+
+        # Prefetch valuation layers for cost
+        all_layers = self.env['stock.valuation.layer'].search([
+            ('stock_move_id', 'in', moves.ids),
+        ])
+        layers_by_move = {}
+        for layer in all_layers:
+            layers_by_move.setdefault(layer.stock_move_id.id, []).append(layer)
+
+        # Fallback CMUP cache at date_from for moves without valuation layers
+        cmup_cache = self._batch_compute_cmup_at_date(date_from_dt)
+        product_ids = list(set(moves.mapped('product_id').ids))
+        products_browse = self.env['product.product'].browse(product_ids)
+        std_price_map = {p.id: p.standard_price for p in products_browse}
+
+        rows = []
+        for move in moves:
+            qty = self._compute_move_qty(move, location_set)
+            if not qty:
+                continue
+            move_type = self._classify_move(move, location_set)
+            product = move.product_id
+
+            # Resolve dépôt : prefer location whose side is in our set
+            if move.location_dest_id.id in location_set:
+                wh = wh_by_location.get(move.location_dest_id.id)
+            else:
+                wh = wh_by_location.get(move.location_id.id)
+            wh_name = wh.name if wh else ''
+
+            # Cost from valuation layer or fallback
+            move_layers = layers_by_move.get(move.id, [])
+            if move_layers:
+                layer_value = sum(l.value for l in move_layers)
+                layer_qty = sum(l.quantity for l in move_layers)
+                unit_cost = abs(layer_value / layer_qty) if layer_qty else 0.0
+            else:
+                unit_cost = cmup_cache.get(
+                    product.id, std_price_map.get(product.id, 0.0)
+                )
+
+            montant = qty * unit_cost
+
+            rows.append({
+                'date_fmt': move.date.strftime('%d/%m/%Y'),
+                'type': move_type,
+                'piece': (move.picking_id.name or move.reference or move.name or ''),
+                'code': product.default_code or '',
+                'article': product.name or '',
+                'famille': product.categ_id.complete_name if product.categ_id else '',
+                'tiers': (move.picking_id.partner_id.name
+                          if move.picking_id and move.picking_id.partner_id
+                          else ''),
+                'depot': wh_name,
+                'qty': qty,
+                'cmup': unit_cost,
+                'montant': montant,
+            })
+        return rows
+
+    def _generate_xlsx_brut(self, rows):
+        """Generate a flat Excel (one row per move) — Stock Brut format."""
+        import xlsxwriter
+
+        output = io.BytesIO()
+        wb = xlsxwriter.Workbook(output, {'in_memory': True})
+
+        fmt_title = wb.add_format({
+            'bold': True, 'font_size': 14, 'align': 'center',
+        })
+        fmt_header = wb.add_format({
+            'bold': True, 'bg_color': '#4472C4', 'font_color': 'white',
+            'border': 1, 'align': 'center', 'text_wrap': True,
+        })
+        fmt_text = wb.add_format({'border': 1, 'font_size': 10})
+        fmt_qty = wb.add_format({
+            'border': 1, 'font_size': 10, 'num_format': '#,##0.000',
+        })
+        fmt_qty_neg = wb.add_format({
+            'border': 1, 'font_size': 10, 'num_format': '#,##0.000',
+            'font_color': 'red',
+        })
+        fmt_num = wb.add_format({
+            'border': 1, 'font_size': 10, 'num_format': '#,##0.00',
+        })
+        fmt_num_neg = wb.add_format({
+            'border': 1, 'font_size': 10, 'num_format': '#,##0.00',
+            'font_color': 'red',
+        })
+        fmt_total_lbl = wb.add_format({
+            'bold': True, 'bg_color': '#1F3864', 'font_color': 'white',
+            'border': 2, 'font_size': 11,
+        })
+        fmt_total_num = wb.add_format({
+            'bold': True, 'bg_color': '#1F3864', 'font_color': 'white',
+            'border': 2, 'font_size': 11, 'num_format': '#,##0.00',
+        })
+
+        ws = wb.add_worksheet('Stock Brut')
+
+        headers = [
+            'Date Mouvement', 'Type Mouvement', 'N° Pièce',
+            'Code', 'Désignation Article', 'Famille',
+            'Mouvements de', 'Dépôt', 'Quantité', 'CMUP', 'Montant',
+        ]
+        widths = [14, 10, 18, 14, 32, 24, 28, 20, 12, 12, 14]
+        for i, w in enumerate(widths):
+            ws.set_column(i, i, w)
+
+        last_col = len(headers) - 1
+        ws.merge_range(0, 0, 0, last_col, 'Stock Brut — Mouvements', fmt_title)
+        ws.write(1, 0, self.env.company.name, fmt_text)
+        ws.write(1, last_col - 1, 'Période', fmt_text)
+        ws.write(1, last_col, '%s au %s' % (
+            self.date_from.strftime('%d/%m/%Y'),
+            self.date_to.strftime('%d/%m/%Y'),
+        ), fmt_text)
+
+        row = 3
+        for col, h in enumerate(headers):
+            ws.write(row, col, h, fmt_header)
+        row += 1
+        ws.freeze_panes(row, 0)
+        first_data_row = row
+
+        total_montant = 0.0
+        for r in rows:
+            ws.write(row, 0, r['date_fmt'], fmt_text)
+            ws.write(row, 1, r['type'], fmt_text)
+            ws.write(row, 2, r['piece'], fmt_text)
+            ws.write(row, 3, r['code'], fmt_text)
+            ws.write(row, 4, r['article'], fmt_text)
+            ws.write(row, 5, r['famille'], fmt_text)
+            ws.write(row, 6, r['tiers'], fmt_text)
+            ws.write(row, 7, r['depot'], fmt_text)
+            ws.write(row, 8, r['qty'],
+                     fmt_qty_neg if r['qty'] < 0 else fmt_qty)
+            ws.write(row, 9, r['cmup'], fmt_num)
+            ws.write(row, 10, r['montant'],
+                     fmt_num_neg if r['montant'] < 0 else fmt_num)
+            total_montant += r['montant']
+            row += 1
+
+        # Auto-filter on header row
+        if row > first_data_row:
+            ws.autofilter(first_data_row - 1, 0, row - 1, last_col)
+
+        # Grand total row
+        ws.merge_range(row, 0, row, last_col - 1, 'TOTAL', fmt_total_lbl)
+        ws.write(row, last_col, total_montant, fmt_total_num)
 
         wb.close()
         return output.getvalue()
