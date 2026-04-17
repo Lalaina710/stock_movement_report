@@ -788,6 +788,7 @@ class StockMovementReportWizard(models.TransientModel):
                     'date_fmt': self.date_from.strftime('%d/%m/%Y'),
                     'type': 'Report',
                     'piece': 'Stock initial',
+                    'ref_mvt': '',
                     'code': product.default_code or '',
                     'article': product.name or '',
                     'famille': product.categ_id.complete_name if product.categ_id else '',
@@ -826,6 +827,7 @@ class StockMovementReportWizard(models.TransientModel):
                 'date_fmt': move.date.strftime('%d/%m/%Y'),
                 'type': move_type,
                 'piece': (move.picking_id.name or move.reference or move.name or ''),
+                'ref_mvt': (move.picking_id.origin or move.origin or ''),
                 'code': product.default_code or '',
                 'article': product.name or '',
                 'famille': product.categ_id.complete_name if product.categ_id else '',
@@ -895,12 +897,12 @@ class StockMovementReportWizard(models.TransientModel):
         ws = wb.add_worksheet('Stock Brut')
 
         headers = [
-            'Date Mouvement', 'Type Mouvement', 'N° Pièce',
+            'Date Mouvement', 'Type Mouvement', 'N° Pièce', 'Réf. mvt',
             'Code', 'Désignation Article', 'Famille',
             'Mouvements de', 'Dépôt', 'Quantité', 'Solde',
             'CMUP', 'Montant',
         ]
-        widths = [14, 10, 18, 14, 32, 24, 28, 20, 12, 12, 12, 14]
+        widths = [14, 10, 18, 18, 14, 32, 24, 28, 20, 12, 12, 12, 14]
         for i, w in enumerate(widths):
             ws.set_column(i, i, w)
 
@@ -937,16 +939,17 @@ class StockMovementReportWizard(models.TransientModel):
             ws.write(row, 0, r['date_fmt'], f_t)
             ws.write(row, 1, r['type'], f_t)
             ws.write(row, 2, r['piece'], f_t)
-            ws.write(row, 3, r['code'], f_t)
-            ws.write(row, 4, r['article'], f_t)
-            ws.write(row, 5, r['famille'], f_t)
-            ws.write(row, 6, r['tiers'], f_t)
-            ws.write(row, 7, r['depot'], f_t)
-            ws.write(row, 8, r['qty'], fmt_report_qty if is_report else f_q)
-            ws.write(row, 9, r.get('solde', 0),
+            ws.write(row, 3, r.get('ref_mvt', ''), f_t)
+            ws.write(row, 4, r['code'], f_t)
+            ws.write(row, 5, r['article'], f_t)
+            ws.write(row, 6, r['famille'], f_t)
+            ws.write(row, 7, r['tiers'], f_t)
+            ws.write(row, 8, r['depot'], f_t)
+            ws.write(row, 9, r['qty'], fmt_report_qty if is_report else f_q)
+            ws.write(row, 10, r.get('solde', 0),
                      fmt_report_qty if is_report else fmt_qty)
-            ws.write(row, 10, r['cmup'], fmt_report_num if is_report else fmt_num)
-            ws.write(row, 11, r['montant'],
+            ws.write(row, 11, r['cmup'], fmt_report_num if is_report else fmt_num)
+            ws.write(row, 12, r['montant'],
                      fmt_report_num if is_report else f_n)
             if not is_report:
                 total_montant += r['montant']
