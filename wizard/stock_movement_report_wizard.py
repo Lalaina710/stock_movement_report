@@ -695,7 +695,8 @@ class StockMovementReportWizard(models.TransientModel):
     # -------------------------------------------------------------------------
 
     def _get_brut_data(self):
-        """Build a flat list of moves, one row per move, across all warehouses."""
+        """Build a flat list of moves grouped by product, with opening balance
+        (Report line) and running Solde per product."""
         self.ensure_one()
 
         tz = pytz.timezone(self.env.user.tz or 'UTC')
@@ -736,7 +737,7 @@ class StockMovementReportWizard(models.TransientModel):
         if self.lot_id:
             domain.append(('lot_ids', 'in', [self.lot_id.id]))
 
-        moves = self.env['stock.move'].search(domain, order='date, id')
+        moves = self.env['stock.move'].search(domain, order='product_id, date, id')
 
         # Filter out moves internal to the same set of locations (net zero)
         moves = moves.filtered(
@@ -754,21 +755,53 @@ class StockMovementReportWizard(models.TransientModel):
         for layer in all_layers:
             layers_by_move.setdefault(layer.stock_move_id.id, []).append(layer)
 
-        # Fallback CMUP cache at date_from for moves without valuation layers
-        cmup_cache = self._batch_compute_cmup_at_date(date_from_dt)
+        # Batch opening qty + CMUP at date_from
         product_ids = list(set(moves.mapped('product_id').ids))
+        opening_qty_map = self._batch_compute_opening_qty(
+            product_ids, list(location_set), date_from_dt)
+        cmup_cache = self._batch_compute_cmup_at_date(date_from_dt)
         products_browse = self.env['product.product'].browse(product_ids)
         std_price_map = {p.id: p.standard_price for p in products_browse}
 
+        # Group moves by product, sorted by product code then date
         rows = []
+        current_product_id = None
+        running_qty = 0.0
+
         for move in moves:
             qty = self._compute_move_qty(move, location_set)
             if not qty:
                 continue
-            move_type = self._classify_move(move, location_set)
             product = move.product_id
 
-            # Resolve dépôt : prefer location whose side is in our set
+            # New product block → insert Report line
+            if product.id != current_product_id:
+                current_product_id = product.id
+                opening_qty = opening_qty_map.get(product.id, 0.0)
+                opening_cmup = cmup_cache.get(
+                    product.id, std_price_map.get(product.id, 0.0))
+                opening_value = opening_qty * opening_cmup
+                running_qty = opening_qty
+
+                rows.append({
+                    'is_report': True,
+                    'date_fmt': self.date_from.strftime('%d/%m/%Y'),
+                    'type': 'Report',
+                    'piece': 'Stock initial',
+                    'code': product.default_code or '',
+                    'article': product.name or '',
+                    'famille': product.categ_id.complete_name if product.categ_id else '',
+                    'tiers': '',
+                    'depot': '',
+                    'qty': opening_qty,
+                    'solde': opening_qty,
+                    'cmup': opening_cmup,
+                    'montant': opening_value,
+                })
+
+            move_type = self._classify_move(move, location_set)
+
+            # Resolve depot
             if move.location_dest_id.id in location_set:
                 wh = wh_by_location.get(move.location_dest_id.id)
             else:
@@ -783,12 +816,13 @@ class StockMovementReportWizard(models.TransientModel):
                 unit_cost = abs(layer_value / layer_qty) if layer_qty else 0.0
             else:
                 unit_cost = cmup_cache.get(
-                    product.id, std_price_map.get(product.id, 0.0)
-                )
+                    product.id, std_price_map.get(product.id, 0.0))
 
+            running_qty += qty
             montant = qty * unit_cost
 
             rows.append({
+                'is_report': False,
                 'date_fmt': move.date.strftime('%d/%m/%Y'),
                 'type': move_type,
                 'piece': (move.picking_id.name or move.reference or move.name or ''),
@@ -800,13 +834,15 @@ class StockMovementReportWizard(models.TransientModel):
                           else ''),
                 'depot': wh_name,
                 'qty': qty,
+                'solde': running_qty,
                 'cmup': unit_cost,
                 'montant': montant,
             })
         return rows
 
     def _generate_xlsx_brut(self, rows):
-        """Generate a flat Excel (one row per move) — Stock Brut format."""
+        """Generate a flat Excel (one row per move) — Stock Brut format
+        with opening balance (Report) per product and running Solde."""
         import xlsxwriter
 
         output = io.BytesIO()
@@ -834,6 +870,19 @@ class StockMovementReportWizard(models.TransientModel):
             'border': 1, 'font_size': 10, 'num_format': '#,##0.00',
             'font_color': 'red',
         })
+        # Format pour les lignes Report (stock initial)
+        fmt_report = wb.add_format({
+            'bold': True, 'bg_color': '#D9E2F3', 'border': 1,
+            'font_size': 10,
+        })
+        fmt_report_qty = wb.add_format({
+            'bold': True, 'bg_color': '#D9E2F3', 'border': 1,
+            'font_size': 10, 'num_format': '#,##0.000',
+        })
+        fmt_report_num = wb.add_format({
+            'bold': True, 'bg_color': '#D9E2F3', 'border': 1,
+            'font_size': 10, 'num_format': '#,##0.00',
+        })
         fmt_total_lbl = wb.add_format({
             'bold': True, 'bg_color': '#1F3864', 'font_color': 'white',
             'border': 2, 'font_size': 11,
@@ -848,9 +897,10 @@ class StockMovementReportWizard(models.TransientModel):
         headers = [
             'Date Mouvement', 'Type Mouvement', 'N° Pièce',
             'Code', 'Désignation Article', 'Famille',
-            'Mouvements de', 'Dépôt', 'Quantité', 'CMUP', 'Montant',
+            'Mouvements de', 'Dépôt', 'Quantité', 'Solde',
+            'CMUP', 'Montant',
         ]
-        widths = [14, 10, 18, 14, 32, 24, 28, 20, 12, 12, 14]
+        widths = [14, 10, 18, 14, 32, 24, 28, 20, 12, 12, 12, 14]
         for i, w in enumerate(widths):
             ws.set_column(i, i, w)
 
@@ -872,20 +922,34 @@ class StockMovementReportWizard(models.TransientModel):
 
         total_montant = 0.0
         for r in rows:
-            ws.write(row, 0, r['date_fmt'], fmt_text)
-            ws.write(row, 1, r['type'], fmt_text)
-            ws.write(row, 2, r['piece'], fmt_text)
-            ws.write(row, 3, r['code'], fmt_text)
-            ws.write(row, 4, r['article'], fmt_text)
-            ws.write(row, 5, r['famille'], fmt_text)
-            ws.write(row, 6, r['tiers'], fmt_text)
-            ws.write(row, 7, r['depot'], fmt_text)
-            ws.write(row, 8, r['qty'],
-                     fmt_qty_neg if r['qty'] < 0 else fmt_qty)
-            ws.write(row, 9, r['cmup'], fmt_num)
-            ws.write(row, 10, r['montant'],
-                     fmt_num_neg if r['montant'] < 0 else fmt_num)
-            total_montant += r['montant']
+            is_report = r.get('is_report', False)
+
+            if is_report:
+                # Ligne Report (stock initial) — format distinct
+                f_t = fmt_report
+                f_q = fmt_report_qty
+                f_n = fmt_report_num
+            else:
+                f_t = fmt_text
+                f_q = fmt_qty_neg if r['qty'] < 0 else fmt_qty
+                f_n = fmt_num_neg if r.get('montant', 0) < 0 else fmt_num
+
+            ws.write(row, 0, r['date_fmt'], f_t)
+            ws.write(row, 1, r['type'], f_t)
+            ws.write(row, 2, r['piece'], f_t)
+            ws.write(row, 3, r['code'], f_t)
+            ws.write(row, 4, r['article'], f_t)
+            ws.write(row, 5, r['famille'], f_t)
+            ws.write(row, 6, r['tiers'], f_t)
+            ws.write(row, 7, r['depot'], f_t)
+            ws.write(row, 8, r['qty'], fmt_report_qty if is_report else f_q)
+            ws.write(row, 9, r.get('solde', 0),
+                     fmt_report_qty if is_report else fmt_qty)
+            ws.write(row, 10, r['cmup'], fmt_report_num if is_report else fmt_num)
+            ws.write(row, 11, r['montant'],
+                     fmt_report_num if is_report else f_n)
+            if not is_report:
+                total_montant += r['montant']
             row += 1
 
         # Auto-filter on header row
