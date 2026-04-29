@@ -1,6 +1,6 @@
 {
     'name': 'Mouvements de Stock (Format Sage)',
-    'version': '18.0.2.3.0',
+    'version': '18.0.2.4.0',
     'category': 'Inventory/Reporting',
     'summary': 'Rapport mouvements de stock valorisés avec CMUP, format Sage 100',
     'description': """
@@ -9,7 +9,7 @@ Rapport de mouvements de stock au format Sage 100
 - Fiche de stock valorisée par produit
 - Calcul du CMUP (Coût Moyen Unitaire Pondéré) via stock.valuation.layer
 - Stock initial (report), détail mouvements, sous-totaux produit, total dépôt
-- Stock Brut : export plat avec emplacement origine/destination par mouvement
+- Stock Brut : export plat 1 col Emplacement; transferts internes scindés en 2 lignes (sortie origine + entrée destination, même N° pièce)
 - Export PDF et Excel
 - Filtres : période, produit, dépôt, lot
     """,

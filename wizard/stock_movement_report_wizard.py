@@ -735,11 +735,8 @@ class StockMovementReportWizard(models.TransientModel):
 
         moves = self.env['stock.move'].search(domain, order='product_id, date, id')
 
-        # Filter out moves internal to the same set of locations (net zero)
-        moves = moves.filtered(
-            lambda m: not (m.location_id.id in location_set
-                          and m.location_dest_id.id in location_set)
-        )
+        # Internal transfers within the same location_set are NO LONGER filtered:
+        # they will be split into 2 rows (origin -qty + destination +qty) below.
         if not moves:
             return []
 
@@ -769,8 +766,14 @@ class StockMovementReportWizard(models.TransientModel):
 
         for move in moves:
             qty = self._compute_move_qty(move, location_set)
-            if not qty:
+            src_in = move.location_id.id in location_set
+            dst_in = move.location_dest_id.id in location_set
+            is_internal = src_in and dst_in
+
+            # Skip moves with no impact (and not internal — internal use raw qty)
+            if not qty and not is_internal:
                 continue
+
             product = move.product_id
 
             # New product block → reset running balance from opening qty
@@ -782,12 +785,6 @@ class StockMovementReportWizard(models.TransientModel):
 
             move_type = self._classify_move(move, location_set)
 
-            # Emplacements origine / destination (complete_name pour TR lisibles)
-            loc_origin = (move.location_id.complete_name
-                          or move.location_id.name or '')
-            loc_dest = (move.location_dest_id.complete_name
-                        or move.location_dest_id.name or '')
-
             # Cost from valuation layer or fallback
             move_layers = layers_by_move.get(move.id, [])
             if move_layers:
@@ -798,10 +795,7 @@ class StockMovementReportWizard(models.TransientModel):
                 unit_cost = cmup_cache.get(
                     product.id, std_price_map.get(product.id, 0.0))
 
-            running_qty += qty
-            montant = qty * unit_cost
-
-            rows.append({
+            common = {
                 'is_report': False,
                 'date_fmt': move.date.strftime('%d/%m/%Y'),
                 'type': move_type,
@@ -810,13 +804,52 @@ class StockMovementReportWizard(models.TransientModel):
                 'code': product.default_code or '',
                 'article': product.name or '',
                 'famille': product.categ_id.complete_name if product.categ_id else '',
-                'loc_origin': loc_origin,
-                'loc_dest': loc_dest,
-                'qty': qty,
-                'solde': running_qty,
                 'cmup': unit_cost,
-                'montant': montant,
-            })
+            }
+
+            if is_internal:
+                # Transfert interne: 2 lignes consécutives même N° pièce
+                base_qty = move.quantity
+                if self.lot_id:
+                    lot_lines = move.move_line_ids.filtered(
+                        lambda ml: ml.lot_id == self.lot_id
+                    )
+                    base_qty = sum(lot_lines.mapped('quantity'))
+                if not base_qty:
+                    continue
+
+                # Ligne 1 — sortie origine
+                running_qty -= base_qty
+                rows.append(dict(common,
+                    emplacement=(move.location_id.complete_name
+                                 or move.location_id.name or ''),
+                    qty=-base_qty,
+                    solde=running_qty,
+                    montant=-base_qty * unit_cost,
+                ))
+                # Ligne 2 — entrée destination
+                running_qty += base_qty
+                rows.append(dict(common,
+                    emplacement=(move.location_dest_id.complete_name
+                                 or move.location_dest_id.name or ''),
+                    qty=base_qty,
+                    solde=running_qty,
+                    montant=base_qty * unit_cost,
+                ))
+            else:
+                # Mouvement non-interne: 1 ligne avec emplacement contextuel
+                emplacement = (
+                    move.location_dest_id.complete_name if dst_in
+                    else move.location_id.complete_name if src_in
+                    else ''
+                )
+                running_qty += qty
+                rows.append(dict(common,
+                    emplacement=emplacement,
+                    qty=qty,
+                    solde=running_qty,
+                    montant=qty * unit_cost,
+                ))
         return rows
 
     def _generate_xlsx_brut(self, rows):
@@ -868,10 +901,10 @@ class StockMovementReportWizard(models.TransientModel):
         headers = [
             'Date Mouvement', 'Type Mouvement', 'N° Pièce', 'Réf. mvt',
             'Code', 'Désignation Article', 'Famille',
-            'Emplacement origine', 'Emplacement destination',
+            'Emplacement',
             'Quantité', 'Solde', 'CMUP', 'Montant',
         ]
-        widths = [14, 10, 18, 18, 14, 32, 24, 30, 30, 12, 12, 12, 14]
+        widths = [14, 10, 18, 18, 14, 32, 24, 36, 12, 12, 12, 14]
         for i, w in enumerate(widths):
             ws.set_column(i, i, w)
 
@@ -909,12 +942,11 @@ class StockMovementReportWizard(models.TransientModel):
             ws.write(row, 4, r['code'], f_t)
             ws.write(row, 5, r['article'], f_t)
             ws.write(row, 6, r['famille'], f_t)
-            ws.write(row, 7, r.get('loc_origin', ''), f_t)
-            ws.write(row, 8, r.get('loc_dest', ''), f_t)
-            ws.write(row, 9, r['qty'], f_q)
-            ws.write(row, 10, r.get('solde', 0), fmt_qty)
-            ws.write(row, 11, r['cmup'], fmt_num)
-            ws.write(row, 12, r['montant'], f_n)
+            ws.write(row, 7, r.get('emplacement', ''), f_t)
+            ws.write(row, 8, r['qty'], f_q)
+            ws.write(row, 9, r.get('solde', 0), fmt_qty)
+            ws.write(row, 10, r['cmup'], fmt_num)
+            ws.write(row, 11, r['montant'], f_n)
             total_montant += r['montant']
             row += 1
 
