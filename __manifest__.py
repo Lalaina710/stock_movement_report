@@ -1,6 +1,6 @@
 {
     'name': 'Mouvements de Stock (Format Sage)',
-    'version': '18.0.2.5.1',
+    'version': '18.0.2.5.2',
     'category': 'Inventory/Reporting',
     'summary': 'Rapport mouvements de stock valorisés avec CMUP, format Sage 100',
     'description': """

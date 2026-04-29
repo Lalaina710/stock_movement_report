@@ -973,8 +973,13 @@ class StockMovementReportWizard(models.TransientModel):
         if row > first_data_row:
             ws.autofilter(first_data_row - 1, 0, row - 1, last_col)
 
-        # Grand total row
-        ws.merge_range(row, 0, row, last_col - 1, 'TOTAL', fmt_total_lbl)
+        # Ligne vide entre data et TOTAL pour que le tri ne capture pas TOTAL.
+        row += 1
+
+        # Grand total row — pas de merge_range (bloque le tri Excel).
+        ws.write(row, 0, 'TOTAL', fmt_total_lbl)
+        for c in range(1, last_col):
+            ws.write_blank(row, c, None, fmt_total_lbl)
         ws.write(row, last_col, total_montant, fmt_total_num)
 
         wb.close()
