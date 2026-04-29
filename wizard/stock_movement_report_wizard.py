@@ -487,6 +487,17 @@ class StockMovementReportWizard(models.TransientModel):
             return -qty
         return 0.0
 
+    # Mapping code -> libellé Type de document (FR)
+    DOC_TYPE_LABELS = {
+        'INV': 'Inventaire',
+        'FAB': 'Fabrication',
+        'REC': 'Réception fournisseur',
+        'BL': 'Bon de livraison',
+        'RET': 'Retour',
+        'INT': 'Transfert interne',
+        'AUT': 'Autre',
+    }
+
     def _classify_move(self, move, location_set):
         """Classify a stock move into Sage-style type codes."""
         if move.is_inventory:
@@ -504,6 +515,10 @@ class StockMovementReportWizard(models.TransientModel):
             elif code == 'internal':
                 return 'INT'
         return 'AUT'
+
+    def _doc_type_label(self, code):
+        """Return human-readable French label for a move type code."""
+        return self.DOC_TYPE_LABELS.get(code, code or '')
 
     # -------------------------------------------------------------------------
     # Excel generation
@@ -799,6 +814,7 @@ class StockMovementReportWizard(models.TransientModel):
                 'is_report': False,
                 'date_fmt': move.date.strftime('%d/%m/%Y'),
                 'type': move_type,
+                'doc_type': self._doc_type_label(move_type),
                 'piece': (move.picking_id.name or move.reference or move.name or ''),
                 'ref_mvt': (move.picking_id.origin or move.origin or ''),
                 'code': product.default_code or '',
@@ -899,12 +915,13 @@ class StockMovementReportWizard(models.TransientModel):
         ws = wb.add_worksheet('Stock Brut')
 
         headers = [
-            'Date Mouvement', 'Type Mouvement', 'N° Pièce', 'Réf. mvt',
+            'Date Mouvement', 'Type Mouvement', 'Type de document',
+            'N° Pièce', 'Réf. mvt',
             'Code', 'Désignation Article', 'Famille',
             'Emplacement',
             'Quantité', 'Solde', 'CMUP', 'Montant',
         ]
-        widths = [14, 10, 18, 18, 14, 32, 24, 36, 12, 12, 12, 14]
+        widths = [14, 10, 22, 18, 18, 14, 32, 24, 36, 12, 12, 12, 14]
         for i, w in enumerate(widths):
             ws.set_column(i, i, w)
 
@@ -937,16 +954,17 @@ class StockMovementReportWizard(models.TransientModel):
 
             ws.write(row, 0, r['date_fmt'], f_t)
             ws.write(row, 1, r['type'], f_t)
-            ws.write(row, 2, r['piece'], f_t)
-            ws.write(row, 3, r.get('ref_mvt', ''), f_t)
-            ws.write(row, 4, r['code'], f_t)
-            ws.write(row, 5, r['article'], f_t)
-            ws.write(row, 6, r['famille'], f_t)
-            ws.write(row, 7, r.get('emplacement', ''), f_t)
-            ws.write(row, 8, r['qty'], f_q)
-            ws.write(row, 9, r.get('solde', 0), fmt_qty)
-            ws.write(row, 10, r['cmup'], fmt_num)
-            ws.write(row, 11, r['montant'], f_n)
+            ws.write(row, 2, r.get('doc_type', ''), f_t)
+            ws.write(row, 3, r['piece'], f_t)
+            ws.write(row, 4, r.get('ref_mvt', ''), f_t)
+            ws.write(row, 5, r['code'], f_t)
+            ws.write(row, 6, r['article'], f_t)
+            ws.write(row, 7, r['famille'], f_t)
+            ws.write(row, 8, r.get('emplacement', ''), f_t)
+            ws.write(row, 9, r['qty'], f_q)
+            ws.write(row, 10, r.get('solde', 0), fmt_qty)
+            ws.write(row, 11, r['cmup'], fmt_num)
+            ws.write(row, 12, r['montant'], f_n)
             total_montant += r['montant']
             row += 1
 
