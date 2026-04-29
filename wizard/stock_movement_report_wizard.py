@@ -926,7 +926,8 @@ class StockMovementReportWizard(models.TransientModel):
             ws.set_column(i, i, w)
 
         last_col = len(headers) - 1
-        ws.merge_range(0, 0, 0, last_col, 'Stock Brut — Mouvements', fmt_title)
+        # Pas de merge_range sur le titre: bloque le tri Excel sur les colonnes.
+        ws.write(0, 0, 'Stock Brut — Mouvements', fmt_title)
         ws.write(1, 0, self.env.company.name, fmt_text)
         ws.write(1, last_col - 1, 'Période', fmt_text)
         ws.write(1, last_col, '%s au %s' % (
