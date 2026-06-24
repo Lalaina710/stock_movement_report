@@ -62,9 +62,10 @@
                                     <tr style="background-color: #4472C4; color: white;">
                                         <th style="width: 9%; text-align: center;">Date<br/>mouv.</th>
                                         <th style="width: 6%; text-align: center;">Type<br/>mouv.</th>
-                                        <th style="width: 13%; text-align: center;">N° de<br/>pièce</th>
-                                        <th style="width: 27%; text-align: center;">Référence<br/>Tiers</th>
-                                        <th style="width: 9%; text-align: center;">Quantités en stock<br/>+/-</th>
+                                        <th style="width: 12%; text-align: center;">N° de<br/>pièce</th>
+                                        <th style="width: 20%; text-align: center;">Référence<br/>Tiers</th>
+                                        <th style="width: 12%; text-align: center;">N°<br/>Lot</th>
+                                        <th style="width: 8%; text-align: center;">Quantités en stock<br/>+/-</th>
                                         <th style="width: 9%; text-align: center;">Quantités en stock<br/>Solde</th>
                                         <th style="width: 12%; text-align: center;">P.R.<br/>unitaire</th>
                                         <th style="width: 15%; text-align: center;">Stock<br/>permanent</th>
@@ -74,7 +75,7 @@
                                     <t t-foreach="wh_data['products']" t-as="pdata">
                                         <!-- Product Header -->
                                         <tr style="background-color: #D9E2F3;">
-                                            <td colspan="8">
+                                            <td colspan="9">
                                                 <strong>
                                                     <t t-if="pdata['default_code']">
                                                         <t t-out="pdata['default_code']"/>
@@ -93,6 +94,7 @@
                                             <td style="text-align: center;">Report</td>
                                             <td/>
                                             <td>Stock</td>
+                                            <td/>
                                             <td/>
                                             <td style="text-align: right;">
                                                 <t t-out="'%.3f' % pdata['opening_qty']"/>
@@ -122,6 +124,9 @@
                                                 <td>
                                                     <t t-out="line['partner']"/>
                                                 </td>
+                                                <td>
+                                                    <t t-out="line.get('lot', '')"/>
+                                                </td>
                                                 <td t-attf-style="text-align: right;#{' color: red;' if line['qty'] &lt; 0 else ''}">
                                                     <t t-out="'%.3f' % line['qty']"/>
                                                 </td>
@@ -139,7 +144,7 @@
 
                                         <!-- Product Subtotal -->
                                         <tr style="background-color: #E2EFDA; font-weight: bold;">
-                                            <td colspan="4">
+                                            <td colspan="5">
                                                 Total <t t-out="pdata['default_code'] or pdata['name']"/>
                                             </td>
                                             <td/>
@@ -153,12 +158,12 @@
                                         </tr>
 
                                         <!-- Blank separator -->
-                                        <tr><td colspan="8" style="border: none; height: 5px;"/></tr>
+                                        <tr><td colspan="9" style="border: none; height: 5px;"/></tr>
                                     </t>
 
                                     <!-- Warehouse Total -->
                                     <tr style="background-color: #4472C4; color: white; font-weight: bold;">
-                                        <td colspan="4">
+                                        <td colspan="5">
                                             Total <t t-out="wh_data['warehouse_name']"/>
                                         </td>
                                         <td/>
@@ -171,7 +176,7 @@
 
                                     <!-- A reporter -->
                                     <tr style="background-color: #4472C4; color: white; font-weight: bold;">
-                                        <td colspan="6" style="text-align: right;">A reporter</td>
+                                        <td colspan="7" style="text-align: right;">A reporter</td>
                                         <td/>
                                         <td style="text-align: right;">
                                             <t t-out="'{:,.2f}'.format(wh_data['warehouse_total_value']).replace(',', ' ')"/>

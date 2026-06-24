@@ -226,6 +226,7 @@ class StockMovementReportWizard(models.TransientModel):
             for move in product_moves:
                 qty = self._compute_move_qty(move, location_set)
                 move_type = self._classify_move(move, location_set)
+                move_lot = self._get_move_lot_label(move)
 
                 # Unit cost from prefetched valuation layers
                 move_layers = layers_by_move.get(move.id, [])
@@ -252,6 +253,7 @@ class StockMovementReportWizard(models.TransientModel):
                     'type': move_type,
                     'reference': move.picking_id.name or move.reference or move.name or '',
                     'partner': move.picking_id.partner_id.name or '',
+                    'lot': move_lot,
                     'qty': qty,
                     'balance': running_qty,
                     'unit_cost': current_cmup,
@@ -356,6 +358,7 @@ class StockMovementReportWizard(models.TransientModel):
             for move in product_moves:
                 qty = self._compute_move_qty(move, location_set)
                 move_type = self._classify_move(move, location_set)
+                move_lot = self._get_move_lot_label(move)
 
                 move_layers = layers_by_move.get(move.id, [])
                 if move_layers:
@@ -380,6 +383,7 @@ class StockMovementReportWizard(models.TransientModel):
                     'type': move_type,
                     'reference': move.picking_id.name or move.reference or move.name or '',
                     'partner': move.picking_id.partner_id.name or '',
+                    'lot': move_lot,
                     'qty': qty,
                     'balance': running_qty,
                     'unit_cost': current_cmup,
@@ -413,6 +417,17 @@ class StockMovementReportWizard(models.TransientModel):
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
+
+    def _get_move_lot_label(self, move):
+        """Label N° Lot pour un mouvement.
+
+        Si un lot est filtré sur le wizard, n'affiche que celui-ci. Sinon,
+        liste les lots distincts des move lines (peuplé sur les régul INV).
+        """
+        if self.lot_id:
+            return self.lot_id.name or ''
+        lot_names = move.move_line_ids.lot_id.mapped('name')
+        return ', '.join(sorted(set(n for n in lot_names if n)))
 
     def _get_warehouse_location_ids(self, warehouse):
         """Get internal location IDs for a specific warehouse."""
@@ -584,7 +599,7 @@ class StockMovementReportWizard(models.TransientModel):
 
         headers = [
             'Date mouv.', 'Type mouv.', 'N° de pièce',
-            'Référence / Tiers', '+/-', 'Solde',
+            'Référence / Tiers', 'N° Lot', '+/-', 'Solde',
             'P.R. unitaire', 'Stock permanent',
         ]
 
@@ -596,17 +611,18 @@ class StockMovementReportWizard(models.TransientModel):
             ws.set_column(1, 1, 8)
             ws.set_column(2, 2, 18)
             ws.set_column(3, 3, 35)
-            ws.set_column(4, 4, 12)
+            ws.set_column(4, 4, 20)
             ws.set_column(5, 5, 12)
-            ws.set_column(6, 6, 15)
-            ws.set_column(7, 7, 18)
+            ws.set_column(6, 6, 12)
+            ws.set_column(7, 7, 15)
+            ws.set_column(8, 8, 18)
 
             # Title
-            ws.merge_range(0, 0, 0, 7, 'Mouvements de stock', fmt_title)
+            ws.merge_range(0, 0, 0, 8, 'Mouvements de stock', fmt_title)
             ws.write(1, 0, data['company'].name, fmt_text)
             ws.write(1, 3, wh_data['warehouse_name'], fmt_text)
-            ws.write(1, 6, 'Période du', fmt_text)
-            ws.write(1, 7, '%s au %s' % (data['date_from'], data['date_to']), fmt_text)
+            ws.write(1, 7, 'Période du', fmt_text)
+            ws.write(1, 8, '%s au %s' % (data['date_from'], data['date_to']), fmt_text)
 
             row = 3
             for col, h in enumerate(headers):
@@ -624,6 +640,7 @@ class StockMovementReportWizard(models.TransientModel):
                 ws.write(row, 5, '', fmt_product)
                 ws.write(row, 6, '', fmt_product)
                 ws.write(row, 7, '', fmt_product)
+                ws.write(row, 8, '', fmt_product)
                 row += 1
 
                 # Opening balance
@@ -632,9 +649,10 @@ class StockMovementReportWizard(models.TransientModel):
                 ws.write(row, 2, '', fmt_text)
                 ws.write(row, 3, 'Stock', fmt_text)
                 ws.write(row, 4, '', fmt_text)
-                ws.write(row, 5, pdata['opening_qty'], fmt_qty)
-                ws.write(row, 6, pdata['opening_cmup'], fmt_num)
-                ws.write(row, 7, pdata['opening_value'], fmt_num)
+                ws.write(row, 5, '', fmt_text)
+                ws.write(row, 6, pdata['opening_qty'], fmt_qty)
+                ws.write(row, 7, pdata['opening_cmup'], fmt_num)
+                ws.write(row, 8, pdata['opening_value'], fmt_num)
                 row += 1
 
                 # Move lines
@@ -643,11 +661,12 @@ class StockMovementReportWizard(models.TransientModel):
                     ws.write(row, 1, line['type'], fmt_text)
                     ws.write(row, 2, line['reference'], fmt_text)
                     ws.write(row, 3, line['partner'], fmt_text)
-                    ws.write(row, 4, line['qty'],
+                    ws.write(row, 4, line.get('lot', ''), fmt_text)
+                    ws.write(row, 5, line['qty'],
                              fmt_qty_neg if line['qty'] < 0 else fmt_qty)
-                    ws.write(row, 5, line['balance'], fmt_qty)
-                    ws.write(row, 6, line['unit_cost'], fmt_num)
-                    ws.write(row, 7, line['stock_value'], fmt_num)
+                    ws.write(row, 6, line['balance'], fmt_qty)
+                    ws.write(row, 7, line['unit_cost'], fmt_num)
+                    ws.write(row, 8, line['stock_value'], fmt_num)
                     row += 1
 
                 # Product subtotal
@@ -657,9 +676,10 @@ class StockMovementReportWizard(models.TransientModel):
                 ws.merge_range(row, 2, row, 3,
                                'Total  %s' % code, fmt_subtotal_text)
                 ws.write(row, 4, '', fmt_subtotal_text)
-                ws.write(row, 5, pdata['closing_qty'], fmt_subtotal_qty)
-                ws.write(row, 6, '', fmt_subtotal_text)
-                ws.write(row, 7, pdata['closing_value'], fmt_subtotal)
+                ws.write(row, 5, '', fmt_subtotal_text)
+                ws.write(row, 6, pdata['closing_qty'], fmt_subtotal_qty)
+                ws.write(row, 7, '', fmt_subtotal_text)
+                ws.write(row, 8, pdata['closing_value'], fmt_subtotal)
                 row += 1
                 row += 1  # blank row
 
@@ -671,15 +691,16 @@ class StockMovementReportWizard(models.TransientModel):
             ws.write(row, 4, '', fmt_wh_total_text)
             ws.write(row, 5, '', fmt_wh_total_text)
             ws.write(row, 6, '', fmt_wh_total_text)
-            ws.write(row, 7, wh_data['warehouse_total_value'], fmt_wh_total)
+            ws.write(row, 7, '', fmt_wh_total_text)
+            ws.write(row, 8, wh_data['warehouse_total_value'], fmt_wh_total)
             row += 1
 
             # A reporter
             ws.write(row, 0, '', fmt_wh_total_text)
             ws.write(row, 1, '', fmt_wh_total_text)
-            ws.merge_range(row, 2, row, 5, 'A reporter', fmt_wh_total_text)
-            ws.write(row, 6, '', fmt_wh_total_text)
-            ws.write(row, 7, wh_data['warehouse_total_value'], fmt_wh_total)
+            ws.merge_range(row, 2, row, 6, 'A reporter', fmt_wh_total_text)
+            ws.write(row, 7, '', fmt_wh_total_text)
+            ws.write(row, 8, wh_data['warehouse_total_value'], fmt_wh_total)
 
         # Summary sheet if multiple warehouses
         if len(data['warehouses']) > 1:
@@ -810,6 +831,14 @@ class StockMovementReportWizard(models.TransientModel):
                 unit_cost = cmup_cache.get(
                     product.id, std_price_map.get(product.id, 0.0))
 
+            # N° Lot : lot du filtre s'il est défini, sinon lots distincts des
+            # move lines (peuplé sur les régul d'inventaire INV).
+            if self.lot_id:
+                lot_label = self.lot_id.name or ''
+            else:
+                lot_names = move.move_line_ids.lot_id.mapped('name')
+                lot_label = ', '.join(sorted(set(n for n in lot_names if n)))
+
             common = {
                 'is_report': False,
                 'date_fmt': move.date.strftime('%d/%m/%Y'),
@@ -820,6 +849,7 @@ class StockMovementReportWizard(models.TransientModel):
                 'code': product.default_code or '',
                 'article': product.name or '',
                 'famille': product.categ_id.complete_name if product.categ_id else '',
+                'lot': lot_label,
                 'cmup': unit_cost,
             }
 
@@ -919,9 +949,10 @@ class StockMovementReportWizard(models.TransientModel):
             'N° Pièce', 'Réf. mvt',
             'Code', 'Désignation Article', 'Famille',
             'Emplacement',
+            'N° Lot',
             'Quantité', 'Solde', 'CMUP', 'Montant',
         ]
-        widths = [14, 10, 22, 18, 18, 14, 32, 24, 36, 12, 12, 12, 14]
+        widths = [14, 10, 22, 18, 18, 14, 32, 24, 36, 20, 12, 12, 12, 14]
         for i, w in enumerate(widths):
             ws.set_column(i, i, w)
 
@@ -962,10 +993,11 @@ class StockMovementReportWizard(models.TransientModel):
             ws.write(row, 6, r['article'], f_t)
             ws.write(row, 7, r['famille'], f_t)
             ws.write(row, 8, r.get('emplacement', ''), f_t)
-            ws.write(row, 9, r['qty'], f_q)
-            ws.write(row, 10, r.get('solde', 0), fmt_qty)
-            ws.write(row, 11, r['cmup'], fmt_num)
-            ws.write(row, 12, r['montant'], f_n)
+            ws.write(row, 9, r.get('lot', ''), fmt_text)
+            ws.write(row, 10, r['qty'], f_q)
+            ws.write(row, 11, r.get('solde', 0), fmt_qty)
+            ws.write(row, 12, r['cmup'], fmt_num)
+            ws.write(row, 13, r['montant'], f_n)
             total_montant += r['montant']
             row += 1
 
